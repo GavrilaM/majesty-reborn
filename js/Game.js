@@ -5,6 +5,7 @@ import { Flag } from './entities/Flag.js';
 import { Projectile } from './entities/Projectile.js';
 import { Particle } from './entities/Particle.js';
 import { EconomicBuilding } from './entities/EconomicBuilding.js';
+import { ItemDrop } from './entities/ItemDrop.js';
 import { UIManager } from './managers/UIManager.js';
 import { BuildManager } from './managers/BuildManager.js';
 import { Utils } from './utils.js';
@@ -33,7 +34,7 @@ class Game {
             this.mouseX = e.clientX - rect.left;
             this.mouseY = e.clientY - rect.top;
         });
-        this.castle = new EconomicBuilding(this.canvas.width/2, this.canvas.height/2, 'CASTLE');
+        this.castle = new EconomicBuilding(this.canvas.width/2, this.canvas.height/2, 'CASTLE', this);
         this.entities.push(this.castle);
         this.setupInputs();
         this.loop(0);

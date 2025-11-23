@@ -2,12 +2,14 @@ import { Utils } from '../utils.js';
 import { Projectile } from './Projectile.js';
 import { Particle } from './Particle.js';
 import { BUILDING_CONFIG } from '../config/BuildingConfig.js';
+import { ITEM_CONFIG } from '../config/ItemConfig.js';
 
 export class EconomicBuilding {
-    constructor(x, y, type) {
+    constructor(x, y, type, game = null) {
         this.x = x;
         this.y = y;
         this.type = type;
+        this.game = game; // NEW: Store reference to game for transactions
         
         const config = BUILDING_CONFIG[type];
         this.name = config.name;
@@ -58,7 +60,12 @@ export class EconomicBuilding {
     enter(hero) {
         if (!this.visitors.includes(hero)) {
             this.visitors.push(hero);
-            hero.visible = false; 
+            hero.visible = false;
+            
+            // NEW: If this is a Market, attempt to sell potions
+            if (this.type === 'MARKET') {
+                this.attemptPotionSale(hero);
+            }
         }
     }
 
@@ -70,6 +77,86 @@ export class EconomicBuilding {
             hero.x = this.x;
             hero.y = this.y + (this.height/2) + 15; // Spawn at feet
         }
+    }
+
+    attemptPotionSale(hero) {
+        const potionCost = ITEM_CONFIG.POTION.cost; // 30g
+        const playerProfit = 10; // Player gets 10g tax per sale
+        
+        // Purchase conditions (ALL must be true):
+        // 1. Hero needs healing (not at full HP)
+        // 2. Hero has enough gold
+        // 3. Hero's belt has an empty slot
+        const needsHealing = hero.hp < hero.maxHp;
+        const canAfford = hero.gold >= potionCost;
+        const hasSpace = !hero.inventory.isBeltFull();
+        
+        // PERSONALITY FACTOR: How many potions to buy?
+        // - Cowardly heroes: Try to fill belt (buy 2 if possible)
+        // - Brave heroes: Buy 1 only
+        // - Smart heroes: Calculate based on HP deficit
+        const targetPotions = this.calculatePotionsToBuy(hero);
+        
+        // Attempt to buy potions until belt is full or conditions fail
+        let purchaseCount = 0;
+        while (purchaseCount < targetPotions && 
+               hero.hp < hero.maxHp && 
+               hero.gold >= potionCost && 
+               !hero.inventory.isBeltFull()) {
+            
+            // Transaction successful
+            hero.gold -= potionCost;
+            const success = hero.inventory.addPotion({
+                type: 'POTION',
+                name: ITEM_CONFIG.POTION.name,
+                healAmount: ITEM_CONFIG.POTION.healAmount
+            });
+            
+            if (success) {
+                purchaseCount++;
+                
+                // Player gets tax profit
+                if (this.game) {
+                    this.game.gold += playerProfit;
+                }
+            } else {
+                // Belt is full (shouldn't happen due to while condition, but safety check)
+                break;
+            }
+        }
+        
+        // Visual feedback if any purchases were made
+        if (purchaseCount > 0 && this.game) {
+            const totalProfit = purchaseCount * playerProfit;
+            this.game.entities.push(new Particle(
+                this.x, 
+                this.y - 30, 
+                `+${totalProfit}g`, 
+                "yellow"
+            ));
+        }
+    }
+
+    calculatePotionsToBuy(hero) {
+        // Cowardly heroes always buy 2 (fill belt for safety)
+        if (hero.personality.brave < 0.4) {
+            return 2;
+        }
+        
+        // Very brave heroes only buy 1 (minimal insurance)
+        if (hero.personality.brave > 0.8) {
+            return 1;
+        }
+        
+        // Smart heroes calculate based on HP deficit
+        if (hero.personality.smart > 0.7) {
+            const hpMissing = hero.maxHp - hero.hp;
+            const potionsNeeded = Math.ceil(hpMissing / 50); // 50 HP per potion
+            return Math.min(potionsNeeded, 2); // Cap at 2 (belt capacity)
+        }
+        
+        // Default: Buy 1 potion
+        return 1;
     }
 
     updateTowerDefense(dt, game) {

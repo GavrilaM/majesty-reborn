@@ -160,18 +160,30 @@ export class UIManager {
             <div class="stat-item"><span>LUK</span> <span class="stat-val">${Math.floor(stats.LUK)}</span></div>
         `;
 
-        // ITEMS TAB - Always update inventory when hero data is refreshed
+        // ITEMS TAB - Display Belt slots
         const invEl = document.getElementById('insp-inventory');
         if(invEl) {
             invEl.innerHTML = '';
-            for(let i=0; i<h.inventory.capacity; i++) {
-                const item = h.inventory.items[i];
-                const slot = document.createElement('div');
-                slot.className = item ? 'inv-slot filled' : 'inv-slot';
-                slot.innerText = item ? item.name[0] : '';
-                slot.title = item ? item.name : 'Empty';
-                invEl.appendChild(slot);
-            }
+            
+            // Add Belt label
+            const beltLabel = document.createElement('div');
+            beltLabel.style.cssText = 'font-size:10px; color:#888; margin-bottom:4px;';
+            beltLabel.innerText = 'BELT (Quick Use)';
+            invEl.appendChild(beltLabel);
+            
+            // Potion Slot 1
+            const slot1 = document.createElement('div');
+            slot1.className = h.inventory.belt.potion1 ? 'inv-slot filled' : 'inv-slot';
+            slot1.innerText = h.inventory.belt.potion1 ? '🧪' : '';
+            slot1.title = h.inventory.belt.potion1 ? h.inventory.belt.potion1.name : 'Empty';
+            invEl.appendChild(slot1);
+            
+            // Potion Slot 2
+            const slot2 = document.createElement('div');
+            slot2.className = h.inventory.belt.potion2 ? 'inv-slot filled' : 'inv-slot';
+            slot2.innerText = h.inventory.belt.potion2 ? '🧪' : '';
+            slot2.title = h.inventory.belt.potion2 ? h.inventory.belt.potion2.name : 'Empty';
+            invEl.appendChild(slot2);
         }
         
         // MIND TAB

@@ -4,6 +4,8 @@ import { Inventory } from '../components/Inventory.js';
 import { CLASS_CONFIG } from '../config/ClassConfig.js';
 import { Projectile } from './Projectile.js';
 import { Particle } from './Particle.js';
+import { ItemDrop } from './ItemDrop.js';
+import { ITEM_CONFIG } from '../config/ItemConfig.js';
 
 export class Hero {
     constructor(x, y, type) {
@@ -26,7 +28,7 @@ export class Hero {
         const config = CLASS_CONFIG[type];
         this.stats = new Stats(config.baseStats, this.level, type);
         
-        this.inventory = new Inventory(4);
+        this.inventory = new Inventory(); // Belt-based system (no capacity parameter)
         this.gold = 0;
 
         this.hp = this.stats.derived.maxHP;
@@ -65,6 +67,9 @@ export class Hero {
         }
 
         this.maintainSpace(game.entities, dt);
+
+        // NEW: Auto-use potions when HP is low
+        this.checkPotionUsage(game);
 
         if (this.state === 'RETREAT') this.behaviorRetreat(dt, game);
         else if (this.state === 'IDLE') this.behaviorIdle(dt, game);
@@ -161,6 +166,64 @@ export class Hero {
         }
     }
 
+    checkPotionUsage(game) {
+        // Only use potions when visible and not resting in a building
+        if (!this.visible) return;
+        
+        // Don't use potions if we're already retreating to heal
+        // (Let the building heal us for free instead)
+        if (this.state === 'RETREAT') return;
+        
+        // Calculate drink threshold based on personality
+        // Formula: Base 40% HP * personality modifier
+        // - Brave heroes (1.0): Drink at 40% HP (efficient)
+        // - Cowardly heroes (0.3): Drink at 68% HP (wasteful but safe)
+        const baseDrinkPercent = 0.40;
+        const personalityModifier = (2 - this.personality.brave);
+        const drinkThreshold = this.maxHp * baseDrinkPercent * personalityModifier;
+        
+        // Check: HP low enough AND we have a potion
+        if (this.hp < drinkThreshold && this.inventory.hasPotion()) {
+            const potion = this.inventory.usePotion();
+            
+            if (potion) {
+                // Heal the hero
+                const healAmount = potion.healAmount || 50;
+                const oldHp = this.hp;
+                this.hp = Math.min(this.hp + healAmount, this.maxHp);
+                const actualHeal = this.hp - oldHp;
+                
+                // Visual feedback
+                game.entities.push(new Particle(
+                    this.x, 
+                    this.y - 40, 
+                    `+${Math.floor(actualHeal)} HP`, 
+                    "#2ecc71"
+                ));
+                
+                // Optional: Add a "gulp" sound effect trigger here
+                // game.playSound('potion_drink');
+            }
+        }
+    }
+
+    dropPotions(game) {
+        const potions = this.inventory.getAllPotions();
+        
+        // Drop each potion as a lootable ItemDrop entity
+        potions.forEach((potion, index) => {
+            // Scatter drops in a small circle around the hero
+            const angle = (Math.PI * 2 / potions.length) * index;
+            const dropX = this.x + Math.cos(angle) * 20;
+            const dropY = this.y + Math.sin(angle) * 20;
+            
+            game.entities.push(new ItemDrop(dropX, dropY, potion.type));
+        });
+        
+        // Clear the hero's inventory
+        this.inventory.clearPotions();
+    }
+
     attack(game) {
         let damage = this.stats.derived.meleeDamage;
         if (Math.random() < this.stats.derived.critChance) { damage *= 2; game.entities.push(new Particle(this.x, this.y - 30, "CRIT!", "#ff00ff")); }
@@ -179,6 +242,11 @@ export class Hero {
         if (Math.random() < this.stats.derived.parryChance) { amount *= 0.5; if(game) game.entities.push(new Particle(this.x, this.y - 20, "PARRY", "white")); }
         this.hp -= amount; this.history.timesWounded++;
         if (game) game.entities.push(new Particle(this.x, this.y - 20, "-" + Math.floor(amount), "red"));
+        
+        // NEW: Drop potions on death
+        if (this.hp <= 0) {
+            this.dropPotions(game);
+        }
     }
 
     gainXp(amount, game) {

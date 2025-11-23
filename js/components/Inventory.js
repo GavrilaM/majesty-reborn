@@ -1,34 +1,95 @@
 export class Inventory {
-    constructor(capacity = 4) {
-        this.capacity = capacity;
-        this.items = []; // Array of Item Objects
+    constructor() {
+        // Belt: Dedicated consumable slots
+        this.belt = {
+            potion1: null,  // First potion slot
+            potion2: null   // Second potion slot
+            // Future: scroll slot, bomb slot, etc.
+        };
+        
+        // Future expansions (commented out for now):
+        // this.equipment = { weapon: null, armor: null, accessory: null };
+        // this.backpack = { slots: Array(6).fill(null), capacity: 6 };
     }
 
-    add(item) {
-        if (this.items.length >= this.capacity) {
-            return false; // Full
-        }
-        this.items.push(item);
-        return true;
-    }
-
-    remove(itemName) {
-        const idx = this.items.findIndex(i => i.name === itemName);
-        if (idx !== -1) {
-            return this.items.splice(idx, 1)[0]; // Returns the removed item
-        }
-        return null;
-    }
-
-    has(itemName) {
-        return this.items.some(i => i.name === itemName);
-    }
+    // === BELT METHODS ===
     
-    hasType(type) {
-        return this.items.some(i => i.type === type);
+    /**
+     * Add a potion to the first available belt slot
+     * @returns {boolean} - True if added, false if belt is full
+     */
+    addPotion(potion) {
+        if (this.belt.potion1 === null) {
+            this.belt.potion1 = potion;
+            return true;
+        } else if (this.belt.potion2 === null) {
+            this.belt.potion2 = potion;
+            return true;
+        }
+        return false; // Belt is full (2/2 potions)
     }
 
-    get(itemName) {
-        return this.items.find(i => i.name === itemName);
+    /**
+     * Use (remove) one potion from the belt
+     * @returns {Object|null} - The potion object, or null if no potions
+     */
+    usePotion() {
+        // Use potion1 first, then potion2
+        if (this.belt.potion1) {
+            const potion = this.belt.potion1;
+            this.belt.potion1 = null;
+            return potion;
+        } else if (this.belt.potion2) {
+            const potion = this.belt.potion2;
+            this.belt.potion2 = null;
+            return potion;
+        }
+        return null; // No potions available
+    }
+
+    /**
+     * Check how many potions are in the belt
+     * @returns {number} - Count (0, 1, or 2)
+     */
+    getPotionCount() {
+        let count = 0;
+        if (this.belt.potion1) count++;
+        if (this.belt.potion2) count++;
+        return count;
+    }
+
+    /**
+     * Check if belt has at least one potion
+     * @returns {boolean}
+     */
+    hasPotion() {
+        return this.belt.potion1 !== null || this.belt.potion2 !== null;
+    }
+
+    /**
+     * Check if belt is full (2/2 potions)
+     * @returns {boolean}
+     */
+    isBeltFull() {
+        return this.belt.potion1 !== null && this.belt.potion2 !== null;
+    }
+
+    /**
+     * Get all potions as an array (for death drops)
+     * @returns {Array} - Array of potion objects
+     */
+    getAllPotions() {
+        const potions = [];
+        if (this.belt.potion1) potions.push(this.belt.potion1);
+        if (this.belt.potion2) potions.push(this.belt.potion2);
+        return potions;
+    }
+
+    /**
+     * Clear all potions (used when dropping on death)
+     */
+    clearPotions() {
+        this.belt.potion1 = null;
+        this.belt.potion2 = null;
     }
 }

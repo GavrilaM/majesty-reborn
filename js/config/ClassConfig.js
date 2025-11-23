@@ -21,7 +21,7 @@ export const CLASS_CONFIG = {
 export const MONSTER_ARCHETYPES = {
     SWARM: {
         name: "Goblin",
-        hp: 30,
+        hp: 50,
         damage: 8,
         speed: 45,
         xpReward: 10,

@@ -207,28 +207,35 @@ body {
     color: white;
 }
 
-/* INVENTORY GRID (Moved here for clarity) */
+/* INVENTORY GRID */
 .inv-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 4px;
+    display: flex;
+    gap: 8px;
     margin-top: 10px;
+    flex-wrap: wrap;
 }
 
 .inv-slot {
-    width: 30px; 
-    height: 30px; 
+    width: 40px; 
+    height: 40px; 
     background: #333; 
-    border: 1px solid #555;
+    border: 2px solid #555;
     display: flex; 
     justify-content: center; 
     align-items: center;
-    font-size: 10px;
+    font-size: 18px; /* Larger for emoji */
     color: #aaa;
+    position: relative;
 }
 
 .inv-slot.filled {
-    border-color: var(--gold);
-    background: #444;
+    border-color: #2ecc71; /* Green for potions */
+    background: #1e4d2b;
     color: white;
+    box-shadow: 0 0 8px rgba(46, 204, 113, 0.4);
+}
+
+.inv-slot:hover {
+    border-color: var(--gold);
+    cursor: help;
 }

@@ -63,7 +63,7 @@ export class BuildManager {
         }
 
         this.game.gold -= config.cost;
-        this.game.entities.push(new EconomicBuilding(x, y, this.activeType));
+        this.game.entities.push(new EconomicBuilding(x, y, this.activeType, this.game));
         
         // Stop building after placement
         // Note: UIManager handles UI updates automatically in the game loop
