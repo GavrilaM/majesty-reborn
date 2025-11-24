@@ -9,6 +9,7 @@ export class UIManager {
         this.viewEmpty = document.getElementById('view-empty');
         this.viewHero = document.getElementById('view-hero');
         this.viewBuilding = document.getElementById('view-building');
+        this.viewMonster = document.getElementById('view-monster');
         this.actionGrid = document.getElementById('action-grid');
         this.minimapCanvas = document.getElementById('minimapCanvas');
         this.minimapCtx = this.minimapCanvas ? this.minimapCanvas.getContext('2d') : null;
@@ -22,11 +23,13 @@ export class UIManager {
         const btnItems = document.getElementById('tab-btn-items'); // New
         const btnMind = document.getElementById('tab-btn-mind');
         const btnClose = document.getElementById('btn-deselect');
+        const btnCloseMon = document.getElementById('btn-deselect-mon');
 
         if (btnStats) btnStats.onclick = () => this.switchTab('stats');
         if (btnItems) btnItems.onclick = () => this.switchTab('items'); // New
         if (btnMind) btnMind.onclick = () => this.switchTab('mind');
         if (btnClose) btnClose.onclick = () => this.deselect();
+        if (btnCloseMon) btnCloseMon.onclick = () => this.deselect();
     }
 
     // ... (Keep update, select, deselect, switchTab, renderButtons, updateHeroData) ...
@@ -41,6 +44,7 @@ export class UIManager {
             } else {
                 if (this.selectedEntity.constructor.name === 'Hero') this.updateHeroData();
                 if (this.selectedEntity.constructor.name === 'EconomicBuilding') this.updateBuildingData();
+                if (this.selectedEntity.constructor.name === 'Monster') this.updateMonsterData();
             }
         }
 
@@ -56,6 +60,7 @@ export class UIManager {
         if(this.viewEmpty) this.viewEmpty.classList.add('hidden');
         if(this.viewHero) this.viewHero.classList.add('hidden');
         if(this.viewBuilding) this.viewBuilding.classList.add('hidden');
+        if(this.viewMonster) this.viewMonster.classList.add('hidden');
 
         if (entity.constructor.name === 'Hero') {
             if(this.viewHero) this.viewHero.classList.remove('hidden');
@@ -82,6 +87,11 @@ export class UIManager {
             if (entity.type === 'GUILD') this.renderButtons('GUILD');
             else if (entity.type === 'MARKET') this.renderButtons('MARKET');
             else this.renderButtons('BUILDING');
+        }
+        else if (entity.constructor.name === 'Monster') {
+            if(this.viewMonster) this.viewMonster.classList.remove('hidden');
+            this.renderButtons('DEFAULT');
+            this.updateMonsterData();
         }
     }
 
@@ -146,6 +156,8 @@ export class UIManager {
         document.getElementById('insp-lvl').innerText = `Level ${h.level} ${h.type}`;
         document.getElementById('insp-hp-text').innerText = `${Math.floor(h.hp)}/${Math.floor(h.maxHp)}`;
         document.getElementById('insp-state').innerText = h.state;
+        const goldEl = document.getElementById('insp-gold');
+        if (goldEl) goldEl.innerText = `${h.gold}g`;
         document.getElementById('insp-hp-bar').style.width = (h.hp/h.maxHp)*100 + '%';
         document.getElementById('insp-portrait').style.backgroundColor = h.color;
 
@@ -206,6 +218,27 @@ export class UIManager {
                 </div>
             `;
         }
+    }
+
+    updateMonsterData() {
+        const m = this.selectedEntity;
+        if(!m) return;
+        const nameEl = document.getElementById('mon-name');
+        const typeEl = document.getElementById('mon-type');
+        const hpTextEl = document.getElementById('mon-hp-text');
+        const hpBarEl = document.getElementById('mon-hp-bar');
+        const descEl = document.getElementById('mon-desc');
+        const statsEl = document.getElementById('mon-stats');
+        if (nameEl) nameEl.innerText = m.displayName || m.archetype;
+        if (typeEl) typeEl.innerText = 'Monster';
+        if (hpTextEl) hpTextEl.innerText = `${Math.floor(m.hp)}/${Math.floor(m.maxHp)}`;
+        if (hpBarEl) hpBarEl.style.width = (m.hp/m.maxHp)*100 + '%';
+        if (descEl) descEl.innerText = m.description || '';
+        if (statsEl) statsEl.innerHTML = `
+            <div style="font-size:11px; color: var(--gold);">Dodge: ${(m.dodgeChance*100).toFixed(0)}%</div>
+            <div style="font-size:11px; color: var(--gold);">Parry: ${(m.parryChance*100).toFixed(0)}%</div>
+            <div style="font-size:11px; color: var(--gold);">Resist: ${(m.resistPct*100).toFixed(0)}%</div>
+        `;
     }
 
     updateBuildingData() {

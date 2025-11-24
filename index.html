@@ -35,6 +35,7 @@
                         <div class="hero-info">
                             <h2 id="insp-name">Name</h2>
                             <div class="hero-level" id="insp-lvl">Lv. 1</div>
+                            <div class="hero-level" id="insp-gold">0g</div>
                         </div>
                     </div>
                     
@@ -71,6 +72,25 @@
                     </div>
                     
                     <button id="btn-deselect" style="width:100%; margin-top:10px; background:#333; color:#ccc; border:none; cursor:pointer;">Close</button>
+                </div>
+
+                <div id="view-monster" class="hidden">
+                    <div class="hero-header">
+                        <div class="portrait-frame" id="mon-portrait" style="background:#700;"></div>
+                        <div class="hero-info">
+                            <h2 id="mon-name">Monster</h2>
+                            <div class="hero-level" id="mon-type">Enemy</div>
+                        </div>
+                    </div>
+                    <div class="stat-bar-container">
+                        <div style="background:#444; height:4px; margin:5px 0;">
+                            <div id="mon-hp-bar" style="width:100%; height:100%; background:red;"></div>
+                        </div>
+                        <div style="text-align:right; font-size:10px;" id="mon-hp-text">50/50</div>
+                    </div>
+                    <p id="mon-desc" style="font-size:11px; color:#ccc; margin-top:10px; font-style:italic; padding: 5px; background: rgba(0,0,0,0.2);"></p>
+                    <div id="mon-stats" style="margin-top:10px; font-size:11px; color: gold;"></div>
+                    <button id="btn-deselect-mon" style="width:100%; margin-top:10px; background:#333; color:#ccc; border:none; cursor:pointer;">Close</button>
                 </div>
 
                 <!-- STATE 3: BUILDING SELECTED -->

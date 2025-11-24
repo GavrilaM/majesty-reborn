@@ -25,6 +25,11 @@ export const MONSTER_ARCHETYPES = {
         damage: 8,
         speed: 45,
         xpReward: 10,
+        goldDrop: 15,
+        description: "Quick scavenger that harasses and retreats.",
+        dodgeChance: 0.1,
+        parryChance: 0.0,
+        resistPct: 0.05,
         targetPriority: 'HERO',
         spawnCount: [5, 8],
         color: "#4a7c34"
@@ -35,6 +40,11 @@ export const MONSTER_ARCHETYPES = {
         damage: 25,
         speed: 25,
         xpReward: 50,
+        goldDrop: 50,
+        description: "Brutish enforcer with thick hide and slow swings.",
+        dodgeChance: 0.02,
+        parryChance: 0.08,
+        resistPct: 0.2,
         targetPriority: 'HERO',
         spawnCount: [1, 2],
         color: "#8b4513"

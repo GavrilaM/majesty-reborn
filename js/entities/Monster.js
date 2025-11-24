@@ -15,32 +15,47 @@ export class Monster {
         this.damage = config.damage;
         this.speed = config.speed;
         this.xpValue = config.xpReward;
+        this.goldDrop = config.goldDrop || 0;
         this.color = config.color;
+        this.displayName = config.name || archetypeKey;
+        this.description = config.description || '';
+        this.dodgeChance = config.dodgeChance || 0;
+        this.parryChance = config.parryChance || 0;
+        this.resistPct = config.resistPct || 0;
         
         this.radius = archetypeKey === 'TANK' ? 20 : 12; 
         this.remove = false;
         this.attackCooldown = 0;
         this.target = null;
+        this.lastHitBy = null;
+        this.killedBy = null;
         
         // AGGRO SYSTEM
-        this.aggroTarget = null; // Hero or Tower who damaged us (for retaliation)
-        this.aggroTimer = 0; // How long to chase the aggro target (5 seconds)
-        this.noticeRange = 150; // How close a hero needs to be to trigger "opportunity" attack
+        this.aggroTarget = null;
+        this.aggroLockTimer = 0;
+        this.aggroLockDuration = 3.0;
+        this.noticeRange = 150;
+        this.threatTable = new Map();
         
         // SIEGE SYSTEM - Lock-on persistence
-        this.siegeTarget = null; // Building we're currently sieging
-        this.siegeLockTimer = 0; // How long to stick with a siege target (prevents stuttering)
-        this.siegeLockDuration = 2.0; // Lock onto building for 2 seconds minimum
+        this.siegeTarget = null;
+        this.siegeLockTimer = 0;
+        this.siegeLockDuration = 2.0;
+        this.decisionTimer = 0;
     }
 
     update(dt, game) {
         if (this.attackCooldown > 0) this.attackCooldown -= dt;
         
-        // Update aggro timer
-        if (this.aggroTimer > 0) {
-            this.aggroTimer -= dt;
-            if (this.aggroTimer <= 0) {
-                this.aggroTarget = null; // Retaliation period expired
+        if (this.aggroLockTimer > 0) this.aggroLockTimer -= dt;
+        if (this.decisionTimer > 0) this.decisionTimer -= dt;
+        
+        // Threat decay
+        if (this.threatTable.size > 0) {
+            const decay = 5 * dt;
+            for (const [attacker, threat] of this.threatTable.entries()) {
+                const next = Math.max(0, threat - decay);
+                if (next === 0) this.threatTable.delete(attacker); else this.threatTable.set(attacker, next);
             }
         }
         
@@ -53,19 +68,14 @@ export class Monster {
 
         // === AGGRO SYSTEM: 3-STEP PRIORITY ===
         
-        // STEP 1: RETALIATION - If hit by a Hero or Tower, chase them for 5 seconds
-        if (this.aggroTarget && this.aggroTimer > 0) {
-            // Validate aggro target
-            const isHero = this.aggroTarget.constructor.name === 'Hero';
-            const isTower = this.aggroTarget.constructor.name === 'EconomicBuilding' && this.aggroTarget.type === 'TOWER';
-            
-            if (this.aggroTarget.remove || this.aggroTarget.hp <= 0 ||
-                (isHero && (!this.aggroTarget.visible || this.aggroTarget.hp <= 0))) {
+        // Aggro lock: commit to target for minimum duration unless exceptions
+        if (this.aggroTarget && this.aggroLockTimer > 0) {
+            const maxRange = 300;
+            const invalid = !this.isValidTarget(this.aggroTarget) || Utils.dist(this.x, this.y, this.aggroTarget.x, this.aggroTarget.y) > maxRange;
+            if (invalid) {
+                this.aggroLockTimer = 0;
                 this.aggroTarget = null;
-                this.aggroTimer = 0;
             } else {
-                // Chase the attacker (Hero or Tower) who damaged us
-                // Aggro overrides siege lock
                 this.target = this.aggroTarget;
                 this.siegeTarget = null;
                 this.siegeLockTimer = 0;
@@ -89,16 +99,16 @@ export class Monster {
             });
             
             if (nearbyHero) {
-                // Hero opportunity overrides siege lock
-                this.target = nearbyHero;
-                this.siegeTarget = null;
-                this.siegeLockTimer = 0;
+                if ((!this.aggroTarget || this.aggroLockTimer <= 0) && this.decisionTimer <= 0) {
+                    this.target = nearbyHero;
+                    this.decisionTimer = Utils.rand(0, 2);
+                }
             }
         }
         
         // STEP 3: SIEGE - Target the nearest building (Guilds, Markets, Towers, or Castle)
         // Only if we're not in aggro mode and siege lock has expired or no siege target
-        if (!this.aggroTarget && this.aggroTimer <= 0) {
+        if (!this.aggroTarget && this.aggroLockTimer <= 0) {
             const isCurrentTargetBuilding = this.target && 
                 (this.target.constructor.name === 'EconomicBuilding' || 
                  this.target.constructor.name === 'Building');
@@ -201,6 +211,35 @@ export class Monster {
         }
     }
 
+    isValidTarget(ent) {
+        if (!ent) return false;
+        if (ent.remove || ent.hp <= 0) return false;
+        if (ent.constructor.name === 'Hero') return ent.visible && ent.hp > 0 && !ent.remove;
+        return true;
+    }
+
+    evaluateThreatSwitch() {
+        if (this.threatTable.size === 0) return;
+        const currentThreat = this.aggroTarget ? (this.threatTable.get(this.aggroTarget) || 0) : 0;
+        let top = null;
+        let topThreat = 0;
+        for (const [attacker, threat] of this.threatTable.entries()) {
+            if (!this.isValidTarget(attacker)) continue;
+            if (threat > topThreat) { topThreat = threat; top = attacker; }
+        }
+        if (!top) return;
+        const threshold = currentThreat * 1.5;
+        if (!this.aggroTarget || this.aggroLockTimer <= 0) {
+            if (topThreat >= threshold) {
+                this.aggroTarget = top;
+                this.target = top;
+                this.aggroLockTimer = this.aggroLockDuration;
+                this.siegeTarget = null;
+                this.siegeLockTimer = 0;
+            }
+        }
+    }
+
     maintainSpace(entities, dt) {
         entities.forEach(e => {
             if (e === this || e.remove) return;
@@ -218,25 +257,53 @@ export class Monster {
     }
 
     takeDamage(amount, game, source = null) {
+        this.lastHitBy = source || this.lastHitBy;
+        if (Math.random() < this.dodgeChance) {
+            if (game) game.entities.push(new Particle(this.x, this.y - 20, "DODGE", "cyan"));
+            amount = 0;
+        }
+        if (amount > 0 && Math.random() < this.parryChance) {
+            amount *= 0.5;
+            if (game) game.entities.push(new Particle(this.x, this.y - 20, "PARRY", "white"));
+        }
+        if (amount > 0 && this.resistPct > 0) {
+            amount = amount * (1 - this.resistPct);
+        }
         this.hp -= amount;
         if (game) game.entities.push(new Particle(this.x, this.y - 20, "-" + Math.floor(amount), "#ff5555"));
         
-        // AGGRO: If damaged by a Hero OR a Tower, set them as retaliation target for 5 seconds
         if (source) {
-            const isHero = source.constructor.name === 'Hero';
-            const isTower = source.constructor.name === 'EconomicBuilding' && source.type === 'TOWER';
-            
-            // If I was hit by a Hero OR a Tower, and they're still valid
-            if ((isHero && source.visible && !source.remove && source.hp > 0) ||
-                (isTower && !source.remove && source.hp > 0)) {
-                this.aggroTarget = source;
-                this.aggroTimer = 5.0; // Chase for 5 seconds
-                // Immediately switch target to the attacker
-                this.target = source;
+            const prev = this.threatTable.get(source) || 0;
+            this.threatTable.set(source, prev + amount);
+            if (this.aggroLockTimer <= 0 && this.decisionTimer <= 0) {
+                this.evaluateThreatSwitch();
+                this.decisionTimer = Utils.rand(0, 2);
             }
         }
         
-        if (this.hp <= 0) this.remove = true;
+        if (this.hp <= 0) {
+            const gold = this.goldDrop || 0;
+            if (game && gold > 0) {
+                const payees = [];
+                for (const attacker of this.threatTable.keys()) {
+                    if (attacker && attacker.constructor && attacker.constructor.name === 'Hero' && !attacker.remove && attacker.hp > 0) {
+                        payees.push(attacker);
+                    }
+                }
+                if (payees.length > 0) {
+                    const share = Math.floor(gold / payees.length);
+                    if (share > 0) {
+                        payees.forEach(h => {
+                            h.history.goldEarned += share;
+                            h.gold += share;
+                            game.entities.push(new Particle(h.x, h.y - 30, `+${share}g`, 'gold'));
+                        });
+                    }
+                }
+            }
+            this.killedBy = this.lastHitBy;
+            this.remove = true;
+        }
     }
 
     draw(ctx) {
