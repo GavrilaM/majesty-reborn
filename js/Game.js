@@ -86,9 +86,8 @@ class Game {
         // Check UI Selection (prioritize units over buildings)
         // Sort by distance to mouse to click the "top" thing
         const candidates = this.entities.filter(ent => {
-            if (ent.constructor.name === 'Hero') return Utils.dist(x, y, ent.x, ent.y) < (ent.radius || 15) + 10;
-            if (ent.constructor.name === 'Monster') return Utils.dist(x, y, ent.x, ent.y) < (ent.radius || 12) + 10;
-            if (ent.constructor.name === 'EconomicBuilding') return Math.abs(x - ent.x) < ent.width/2 + 5 && Math.abs(y - ent.y) < ent.height/2 + 5;
+            if (ent instanceof Hero) return Utils.dist(x, y, ent.x, ent.y) < ent.radius + 10;
+            if (ent instanceof EconomicBuilding) return Math.abs(x - ent.x) < ent.width/2 + 5 && Math.abs(y - ent.y) < ent.height/2 + 5;
             return false;
         });
         
@@ -150,27 +149,36 @@ class Game {
         this.ctx.fillStyle = '#2c3e50';
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-        const getEntityBottomY = (ent) => {
-            if (ent.constructor.name === 'EconomicBuilding') return ent.y + ent.height / 2 - 10;
-            if (ent.constructor.name === 'Building') return ent.y + (ent.height || 60) / 2 - 10;
-            if (ent.constructor.name === 'Hero' || ent.constructor.name === 'Monster') return ent.y + (ent.radius || 15);
-            return ent.y;
-        };
+        // --- Z-SORTING FIX: Sort by bottom Y (feet level) ---
+        this.entities.sort((a, b) => {
+            // Calculate bottom Y coordinate (feet level) for proper depth sorting
+            let aBottomY = a.y;
+            let bBottomY = b.y;
 
-        const groundLayer = this.entities.filter(e => e.constructor.name === 'Flag' || e.constructor.name === 'ItemDrop');
-        const entityLayer = this.entities.filter(e =>
-            e.constructor.name === 'EconomicBuilding' ||
-            e.constructor.name === 'Building' ||
-            e.constructor.name === 'Hero' ||
-            e.constructor.name === 'Monster'
-        );
-        const effectsLayer = this.entities.filter(e => e.constructor.name === 'Particle' || e.constructor.name === 'Projectile');
+            // Buildings: y is center, bottom is y + height/2
+            // Adjust offset to push buildings slightly behind units on doorstep
+            if (a.constructor.name === 'EconomicBuilding') {
+                aBottomY = a.y + a.height / 2 - 10; // Push buildings behind units
+            } else if (a.constructor.name === 'Building') {
+                aBottomY = a.y + (a.height || 60) / 2 - 10;
+            } else if (a instanceof Hero || a.constructor.name === 'Monster') {
+                // Units: y is center, feet are at y + radius (or slightly below)
+                aBottomY = a.y + (a.radius || 15);
+            }
 
-        entityLayer.sort((a, b) => getEntityBottomY(a) - getEntityBottomY(b));
+            if (b.constructor.name === 'EconomicBuilding') {
+                bBottomY = b.y + b.height / 2 - 10; // Push buildings behind units
+            } else if (b.constructor.name === 'Building') {
+                bBottomY = b.y + (b.height || 60) / 2 - 10;
+            } else if (b instanceof Hero || b.constructor.name === 'Monster') {
+                bBottomY = b.y + (b.radius || 15);
+            }
 
-        groundLayer.forEach(e => e.draw(this.ctx));
-        entityLayer.forEach(e => e.draw(this.ctx));
-        effectsLayer.forEach(e => e.draw(this.ctx));
+            // Sort by bottom Y - entities with lower bottom Y render first (behind)
+            return aBottomY - bBottomY;
+        });
+
+        this.entities.forEach(e => e.draw(this.ctx));
         this.builder.drawPreview(this.ctx, this.mouseX, this.mouseY);
     }
 

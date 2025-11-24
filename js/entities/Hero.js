@@ -44,9 +44,6 @@ export class Hero {
         this.wanderTimer = 0;
         this.wanderTarget = {x: x, y: y};
         this.fateUsed = false;
-        this.decisionTimer = 0;
-        this.nextState = null;
-        this.nextTarget = null;
     }
 
     update(dt, game) {
@@ -58,7 +55,6 @@ export class Hero {
         }
 
         if (this.attackCooldown > 0) this.attackCooldown -= dt;
-        if (this.decisionTimer > 0) this.decisionTimer -= dt;
 
         const retreatPercent = this.stats.derived.retreatThreshold / this.personality.brave; 
         const retreatHP = this.maxHp * Utils.clamp(retreatPercent, 0.1, 0.8);
@@ -75,27 +71,10 @@ export class Hero {
         // NEW: Auto-use potions when HP is low
         this.checkPotionUsage(game);
 
-        const market = this.findMarket(game);
-        const needsPotions = !this.inventory.isBeltFull() && this.gold >= (ITEM_CONFIG.POTION?.cost || 30);
-        if (this.state !== 'RETREAT' && this.state !== 'FIGHT' && market && needsPotions && this.decisionTimer <= 0) {
-            this.nextState = 'SHOPPING';
-            this.nextTarget = market;
-            this.decisionTimer = Utils.rand(0, 2);
-        }
-
-        if (this.decisionTimer <= 0 && this.nextState && this.state !== 'FIGHT' && this.state !== 'RETREAT') {
-            this.state = this.nextState;
-            this.target = this.nextTarget;
-            this.nextState = null;
-            this.nextTarget = null;
-        }
-
         if (this.state === 'RETREAT') this.behaviorRetreat(dt, game);
         else if (this.state === 'IDLE') this.behaviorIdle(dt, game);
         else if (this.state === 'FIGHT') this.behaviorFight(dt, game);
         else if (this.state === 'QUEST') this.behaviorQuest(dt, game);
-        else if (this.state === 'SHOPPING') this.behaviorShopping(dt, game);
-        else if (this.state === 'EXPLORE') this.behaviorExplore(dt, game);
     }
 
     findHome(game) {
@@ -152,18 +131,7 @@ export class Hero {
             const flag = flags[0];
             if (flag.reward * this.personality.greedy > 50) { this.state = 'QUEST'; this.target = flag; return; }
         }
-        if (this.decisionTimer <= 0) {
-            const d = this.decideIdleAction(game);
-            if (d) { this.state = d.state; this.target = d.target; this.decisionTimer = d.delay; }
-        }
-        if (this.state === 'PATROL') {
-            this.behaviorPatrol(dt, game);
-        } else if (this.state === 'SHOPPING') {
-            this.behaviorShopping(dt, game);
-        } else {
-            this.state = 'EXPLORE';
-            this.wander(dt, game);
-        }
+        this.wander(dt, game);
     }
 
     behaviorFight(dt, game) {
@@ -182,39 +150,6 @@ export class Hero {
                 this.attack(game);
                 this.attackCooldown = this.stats.derived.attackSpeed;
             }
-        }
-    }
-
-    behaviorShopping(dt, game) {
-        if (!this.target || this.target.remove || this.target.type !== 'MARKET') { this.state = 'IDLE'; return; }
-        if (Utils.dist(this.x, this.y, this.target.x, this.target.y) < 20) {
-            if (this.target.enter) {
-                this.target.enter(this);
-            }
-        } else {
-            this.moveTowards(this.target.x, this.target.y, dt);
-        }
-    }
-
-    behaviorExplore(dt, game) {
-        const range = this.stats.derived.perceptionRange;
-        const nearbyMonsters = game.entities.filter(e => e.constructor.name === 'Monster' && Utils.dist(this.x, this.y, e.x, e.y) < range);
-        if (nearbyMonsters.length > 0) { this.state = 'FIGHT'; this.target = nearbyMonsters[0]; return; }
-        const flags = game.entities.filter(e => e.constructor.name === 'Flag');
-        if (flags.length > 0) {
-            const flag = flags[0];
-            if (flag.reward * this.personality.greedy > 50) { this.state = 'QUEST'; this.target = flag; return; }
-        }
-        if (this.decisionTimer <= 0) {
-            const d = this.decideIdleAction(game);
-            if (d) { this.state = d.state; this.target = d.target; this.decisionTimer = d.delay; }
-        }
-        if (this.state === 'PATROL') {
-            this.behaviorPatrol(dt, game);
-        } else if (this.state === 'SHOPPING') {
-            this.behaviorShopping(dt, game);
-        } else {
-            this.wander(dt, game);
         }
     }
 
@@ -307,13 +242,6 @@ export class Hero {
         if (Math.random() < this.stats.derived.parryChance) { amount *= 0.5; if(game) game.entities.push(new Particle(this.x, this.y - 20, "PARRY", "white")); }
         this.hp -= amount; this.history.timesWounded++;
         if (game) game.entities.push(new Particle(this.x, this.y - 20, "-" + Math.floor(amount), "red"));
-        if (amount > 0 && source && this.visible && this.state !== 'RETREAT' && this.hp > 0) {
-            this.state = 'FIGHT';
-            this.target = source;
-            this.nextState = null;
-            this.nextTarget = null;
-            this.decisionTimer = 0;
-        }
         
         // NEW: Drop potions on death
         if (this.hp <= 0) {
@@ -338,48 +266,6 @@ export class Hero {
         const angle = Math.atan2(ty - this.y, tx - this.x);
         this.x += Math.cos(angle) * speed * dt;
         this.y += Math.sin(angle) * speed * dt;
-    }
-    
-    behaviorPatrol(dt, game) {
-        const home = this.findHome(game);
-        const px = home ? home.x + Utils.rand(-80, 80) : this.x;
-        const py = home ? home.y + Utils.rand(40, 120) : this.y;
-        if (!this.wanderTarget) this.wanderTarget = { x: this.x, y: this.y };
-        if (Utils.dist(this.wanderTarget.x, this.wanderTarget.y, this.x, this.y) < 10) {
-            this.wanderTarget.x = px;
-            this.wanderTarget.y = py;
-        }
-        this.moveTowards(this.wanderTarget.x, this.wanderTarget.y, dt);
-    }
-
-    decideIdleAction(game) {
-        const hasMarket = !!this.findMarket(game);
-        const canShop = hasMarket && !this.inventory.isBeltFull() && this.gold >= (ITEM_CONFIG.POTION?.cost || 30);
-        let exploreW = this.type === 'RANGER' ? 0.6 : 0.3;
-        let patrolW = this.type === 'RANGER' ? 0.3 : 0.6;
-        let shopW = 0.1;
-        exploreW += (this.personality.brave - 0.5) * 0.2;
-        patrolW += (0.5 - this.personality.brave) * 0.2;
-        shopW += (this.personality.smart - 0.5) * 0.4 + (this.personality.greedy - 0.5) * 0.2;
-        shopW *= canShop ? 1 : 0.1;
-        const sum = exploreW + patrolW + shopW;
-        const r = Math.random() * sum;
-        const delay = Utils.rand(0, 2);
-        if (r < shopW) return { state: 'SHOPPING', target: this.findMarket(game), delay };
-        else if (r < shopW + patrolW) return { state: 'PATROL', target: this.findHome(game), delay };
-        return { state: 'EXPLORE', target: null, delay };
-    }
-    
-    findMarket(game) {
-        let best = null;
-        let minDist = Infinity;
-        game.entities.forEach(e => {
-            if (e.constructor.name === 'EconomicBuilding' && e.type === 'MARKET' && !e.remove) {
-                const d = Utils.dist(this.x, this.y, e.x, e.y);
-                if (d < minDist) { minDist = d; best = e; }
-            }
-        });
-        return best;
     }
     
     wander(dt, game) {

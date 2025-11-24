@@ -75,15 +75,19 @@ export class EconomicBuilding {
             this.visitors.splice(idx, 1);
             hero.visible = true; 
             hero.x = this.x;
-            hero.y = this.y + (this.height/2) + 25;
-            hero.state = 'IDLE';
-            hero.target = null;
+            hero.y = this.y + (this.height/2) + 15; // Spawn at feet
         }
     }
 
     attemptPotionSale(hero) {
-        const potionCost = ITEM_CONFIG.POTION.cost;
-        const playerProfit = 10;
+        const potionCost = ITEM_CONFIG.POTION.cost; // 30g
+        const playerProfit = 10; // Player gets 10g tax per sale
+        
+        // Purchase conditions (ALL must be true):
+        // 1. Hero needs healing (not at full HP)
+        // 2. Hero has enough gold
+        // 3. Hero's belt has an empty slot
+        const needsHealing = hero.hp < hero.maxHp;
         const canAfford = hero.gold >= potionCost;
         const hasSpace = !hero.inventory.isBeltFull();
         
@@ -96,6 +100,7 @@ export class EconomicBuilding {
         // Attempt to buy potions until belt is full or conditions fail
         let purchaseCount = 0;
         while (purchaseCount < targetPotions && 
+               hero.hp < hero.maxHp && 
                hero.gold >= potionCost && 
                !hero.inventory.isBeltFull()) {
             
@@ -129,11 +134,6 @@ export class EconomicBuilding {
                 `+${totalProfit}g`, 
                 "yellow"
             ));
-        }
-
-        // Exit immediately after shopping to avoid healing-first behavior
-        if (hero && hero.state === 'SHOPPING') {
-            this.exit(hero);
         }
     }
 
