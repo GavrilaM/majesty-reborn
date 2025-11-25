@@ -11,23 +11,24 @@ export class Hero {
     constructor(x, y, type) {
         this.x = x;
         this.y = y;
-        this.type = type; 
+        this.type = type;
         this.color = type === 'WARRIOR' ? '#3498db' : '#27ae60';
         this.radius = 15;
         this.visible = true;
-        
+
         this.name = Utils.generateFantasyName(type);
         this.personality = {
             brave: Utils.rand(0.3, 1.0),
             greedy: Utils.rand(0.3, 1.0),
-            smart: Utils.rand(0.3, 1.0)
+            smart: Utils.rand(0.3, 1.0),
+            social: Utils.rand(0.3, 1.0) // NEW: Social trait
         };
         this.history = { kills: 0, goldEarned: 0, nearDeath: 0, timesWounded: 0 };
 
-        this.level = 1; 
+        this.level = 1;
         const config = CLASS_CONFIG[type];
         this.stats = new Stats(config.baseStats, this.level, type);
-        
+
         this.inventory = new Inventory(); // Belt-based system (no capacity parameter)
         this.gold = 0;
 
@@ -35,30 +36,70 @@ export class Hero {
         this.maxHp = this.stats.derived.maxHP;
         this.xp = 0;
         this.xpToNextLevel = 100;
-        
+
         this.attackCooldown = 0;
         this.lastDamageTime = 0;
-        
-        this.state = 'IDLE'; 
+
+        this.state = 'IDLE';
         this.target = null;
+        this.wanderTarget = { x: x, y: y };
         this.wanderTimer = 0;
-        this.wanderTarget = {x: x, y: y};
+
+        // BALANCING
+        this.decisionTimer = 0; // Delay between major decisions
+        this.maxStamina = Math.floor(this.stats.derived.staminaMax);
+        this.stamina = this.maxStamina;
+        this.staminaRegen = this.stats.derived.staminaRegen; // Per second
+        this.tiredCooldown = 0; // Cooldown for "TIRED" particle spam
+        this.shopTimer = 0;     // Time to spend shopping
+        this.lastShopTime = -100; // Allow immediate shopping at start
         this.fateUsed = false;
+
+        this.skills = [];
+        this.skillActive = null;
+        if (this.type === 'RANGER') {
+            this.skills.push({
+                id: 'ranger_cantcatchme',
+                name: "Can't Catch Me",
+                description: 'Burst of speed and evasion to keep range.',
+                staminaCost: 50,
+                cooldown: 10,
+                durationBase: 2,
+                durationPerLevel: 0.1,
+                durationMax: 4,
+                speedMult: 1.5,
+                dodgeBonus: 0.15,
+                lastUsed: -100
+            });
+        }
     }
 
     update(dt, game) {
         if (this.hp <= 0) { this.remove = true; return; }
-        
+
         if (!this.visible) {
-            this.behaviorResting(dt, game);
+            if (this.state === 'SHOP') {
+                this.behaviorShop(dt, game);
+            } else {
+                this.behaviorResting(dt, game);
+            }
             return;
         }
 
         if (this.attackCooldown > 0) this.attackCooldown -= dt;
+        if (this.tiredCooldown > 0) this.tiredCooldown -= dt;
+        // STAMINA REGEN
+        if (this.stamina < this.maxStamina) {
+            this.stamina = Math.min(this.maxStamina, this.stamina + this.staminaRegen * dt);
+        }
 
-        const retreatPercent = this.stats.derived.retreatThreshold / this.personality.brave; 
+        if (this.skillActive && game.gameTime >= this.skillActive.activeUntil) {
+            this.skillActive = null;
+        }
+
+        const retreatPercent = this.stats.derived.retreatThreshold / this.personality.brave;
         const retreatHP = this.maxHp * Utils.clamp(retreatPercent, 0.1, 0.8);
-        
+
         if (this.hp < retreatHP && this.state !== 'RETREAT') {
             this.state = 'RETREAT';
             this.target = this.findHome(game);
@@ -71,10 +112,24 @@ export class Hero {
         // NEW: Auto-use potions when HP is low
         this.checkPotionUsage(game);
 
-        if (this.state === 'RETREAT') this.behaviorRetreat(dt, game);
-        else if (this.state === 'IDLE') this.behaviorIdle(dt, game);
-        else if (this.state === 'FIGHT') this.behaviorFight(dt, game);
-        else if (this.state === 'QUEST') this.behaviorQuest(dt, game);
+        // State Machine
+        switch (this.state) {
+            case 'RETREAT':
+                this.behaviorRetreat(dt, game);
+                break;
+            case 'IDLE':
+                this.behaviorIdle(dt, game);
+                break;
+            case 'FIGHT':
+                this.behaviorFight(dt, game);
+                break;
+            case 'QUEST':
+                this.behaviorQuest(dt, game);
+                break;
+            case 'SHOP':
+                this.behaviorShop(dt, game);
+                break;
+        }
     }
 
     findHome(game) {
@@ -123,15 +178,182 @@ export class Hero {
     }
 
     behaviorIdle(dt, game) {
+        // SHOPPING CHECK
+        // If we have gold and need potions (belt not full), go shop!
+        // FIX: Add cooldown check to prevent loop
+        if (this.gold >= 50 && !this.inventory.isBeltFull()) {
+            if (game.gameTime - this.lastShopTime > 10) { // 10s cooldown
+                // Check if market exists
+                const hasMarket = game.entities.some(e => e.constructor.name === 'EconomicBuilding' && e.type === 'MARKET' && !e.remove);
+                if (hasMarket) {
+                    this.state = 'SHOP';
+                    this.target = null; // Will find target in behaviorShop
+                    return;
+                }
+            }
+        }
+
         const range = this.stats.derived.perceptionRange;
         const nearbyMonsters = game.entities.filter(e => e.constructor.name === 'Monster' && Utils.dist(this.x, this.y, e.x, e.y) < range);
-        if (nearbyMonsters.length > 0) { this.state = 'FIGHT'; this.target = nearbyMonsters[0]; return; } 
+
+        // PERSONALITY: Find preferred target based on traits
+        const target = this.findPreferredTarget(nearbyMonsters);
+
+        if (target) {
+            this.state = 'FIGHT';
+            this.target = target;
+            // Emote based on personality
+            if (this.personality.brave > 0.8) game.entities.push(new Particle(this.x, this.y - 30, "CHARGE!", "red"));
+            this.decisionTimer = Utils.rand(0.5, 1.0); // Pause before engaging
+            return;
+        }
+
+        // PERSONALITY: Cowardly avoidance
+        // If there are monsters nearby but we didn't pick one (too dangerous), run away!
+        if (nearbyMonsters.length > 0 && this.personality.brave < 0.4) {
+            // Check morale before fleeing!
+            const morale = this.calculateMorale(game);
+            // If morale is high enough (lots of friends), maybe don't flee?
+            // Coward (0.3) * Morale (e.g. 1.5) = 0.45 -> Still low, but maybe enough to stay?
+            // Let's say effective bravery = brave * morale.
+
+            if (this.personality.brave * morale < 0.5) {
+                const closest = nearbyMonsters.sort((a, b) => Utils.dist(this.x, this.y, a.x, a.y) - Utils.dist(this.x, this.y, b.x, b.y))[0];
+                const dist = Utils.dist(this.x, this.y, closest.x, closest.y);
+                if (dist < 100) {
+                    // Run away from closest threat
+                    const angle = Math.atan2(this.y - closest.y, this.x - closest.x); // Angle AWAY
+                    this.x += Math.cos(angle) * this.stats.derived.moveSpeedMultiplier * 60 * dt;
+                    this.y += Math.sin(angle) * this.stats.derived.moveSpeedMultiplier * 60 * dt;
+                    return; // Don't wander if fleeing
+                }
+            }
+        }
+
+        // SOCIAL: Party Formation / Following
+        // DISABLED: Per user request to remove early party behavior for now.
+        /*
+        if (this.personality.social > 0.75) {
+            const allies = this.findNearbyAllies(game, 150); // Reduced range (200 -> 150)
+            if (allies.length > 0) {
+                // Follow the "leader" (highest level or bravest)
+                const leader = allies.sort((a, b) => b.level - a.level || b.personality.brave - a.personality.brave)[0];
+
+                // Only follow if they are moving somewhere (have a target or wandering)
+                // and I'm not too close already
+                const distToLeader = Utils.dist(this.x, this.y, leader.x, leader.y);
+                if (distToLeader > 40) {
+                    this.moveTowards(leader.x, leader.y, dt);
+                    return; // Follow leader instead of wandering randomly
+                }
+            }
+        }
+        */
+
         const flags = game.entities.filter(e => e.constructor.name === 'Flag');
         if (flags.length > 0) {
             const flag = flags[0];
             if (flag.reward * this.personality.greedy > 50) { this.state = 'QUEST'; this.target = flag; return; }
         }
+
+        // BEHAVIOR: Warrior Defense / Patrol
+        // Warriors with high bravery/social (duty) prefer to stay near the Castle
+        if (this.type === 'WARRIOR') {
+            const defendDesire = (this.personality.brave + this.personality.social) / 2;
+            if (defendDesire > 0.6) {
+                // Check distance to Castle
+                const castle = game.castle; // Assuming game.castle exists
+                if (castle) {
+                    const distToCastle = Utils.dist(this.x, this.y, castle.x, castle.y);
+                    if (distToCastle > 200) {
+                        // Too far, patrol back
+                        this.moveTowards(castle.x, castle.y, dt);
+                        return;
+                    }
+                }
+            }
+        }
+
         this.wander(dt, game);
+    }
+
+    findNearbyAllies(game, range) {
+        return game.entities.filter(e =>
+            e.constructor.name === 'Hero' &&
+            e !== this &&
+            !e.remove &&
+            e.hp > 0 &&
+            Utils.dist(this.x, this.y, e.x, e.y) < range
+        );
+    }
+
+    calculateMorale(game) {
+        const allies = this.findNearbyAllies(game, 150);
+        // Base morale 1.0
+        // +0.2 per ally
+        return 1.0 + (allies.length * 0.2);
+    }
+
+    evaluateThreatLevel(target) {
+        if (!target) return 0;
+
+        // Base threat: How fast can they kill me?
+        // (Monster Dmg / My HP)
+        const damageThreat = (target.damage || 10) / (this.hp || 1);
+
+        // Size threat: HP pool
+        const sizeThreat = (target.maxHp || 50) / (this.maxHp || 100);
+
+        let threatScore = (damageThreat * 50) + (sizeThreat * 10);
+
+        // Personality Modifiers
+        // Brave heroes underestimate threat
+        if (this.personality.brave > 0.7) threatScore *= 0.6;
+        // Cowardly heroes overestimate threat
+        if (this.personality.brave < 0.4) threatScore *= 1.5;
+        // Smart heroes assess more accurately (closer to base) but penalty for unknowns? 
+        // (For now, smart just doesn't have a skew, or maybe slight reduction for confidence)
+
+        return threatScore;
+    }
+
+    findPreferredTarget(monsters) {
+        if (!monsters || monsters.length === 0) return null;
+
+        // 1. Filter out "Too Dangerous" targets
+        // Threshold depends on bravery. 
+        // Brave (1.0) tolerates score 100. Coward (0.0) tolerates score 20.
+        const dangerTolerance = 20 + (this.personality.brave * 80);
+
+        const validTargets = monsters.filter(m => {
+            const threat = this.evaluateThreatLevel(m);
+            return threat < dangerTolerance;
+        });
+
+        if (validTargets.length === 0) return null;
+
+        // 2. Sort by Preference
+        return validTargets.sort((a, b) => {
+            // GREEDY: Prioritize Gold/Loot
+            if (this.personality.greedy > 0.7) {
+                return (b.goldValue || 0) - (a.goldValue || 0);
+            }
+
+            // BRAVE: Prioritize Strongest (Max HP)
+            if (this.personality.brave > 0.7) {
+                return b.maxHp - a.maxHp;
+            }
+
+            // SMART: Prioritize Weakest (Kill fast)
+            if (this.personality.smart > 0.7) {
+                return a.hp - b.hp;
+            }
+
+            // DEFAULT: Closest
+            const distA = Utils.dist(this.x, this.y, a.x, a.y);
+            const distB = Utils.dist(this.x, this.y, b.x, b.y);
+            return distA - distB;
+        })[0];
     }
 
     behaviorFight(dt, game) {
@@ -142,10 +364,33 @@ export class Hero {
             }
             this.state = 'IDLE'; this.target = null; return;
         }
-        const range = CLASS_CONFIG[this.type].isRanged ? 150 : 40;
-        if (Utils.dist(this.x, this.y, this.target.x, this.target.y) > range) {
+
+        const config = CLASS_CONFIG[this.type];
+        const dist = Utils.dist(this.x, this.y, this.target.x, this.target.y);
+
+        // CLASS BEHAVIOR: Optimal Range Maintenance
+        const minRange = config.optimalRange ? config.optimalRange[0] : 0;
+        const maxRange = config.optimalRange ? config.optimalRange[1] : 40;
+
+        if (dist > maxRange) {
+            // Too far: Chase
             this.moveTowards(this.target.x, this.target.y, dt);
+        } else if (dist < minRange) {
+            if (this.type === 'RANGER') {
+                const s = this.skills.find(sk => sk.id === 'ranger_cantcatchme');
+                if (s && this.canUseSkill(s, game)) this.useSkill(s, game);
+            }
+            // Too close: Kite / Reposition (Ranger behavior)
+            const kiting = this.behaviorKite(this.target, dt, game);
+            if (!kiting) {
+                // If too tired to kite, fight back!
+                if (this.attackCooldown <= 0) {
+                    this.attack(game);
+                    this.attackCooldown = this.stats.derived.attackSpeed;
+                }
+            }
         } else {
+            // In optimal range: Attack!
             if (this.attackCooldown <= 0) {
                 this.attack(game);
                 this.attackCooldown = this.stats.derived.attackSpeed;
@@ -153,27 +398,73 @@ export class Hero {
         }
     }
 
-    behaviorQuest(dt, game) {
-        if (!this.target || this.target.remove) { this.state = 'IDLE'; return; }
-        this.moveTowards(this.target.x, this.target.y, dt);
-        if (Utils.dist(this.x, this.y, this.target.x, this.target.y) < 20) {
-            this.target.remove = true; this.state = 'IDLE';
-            let reward = this.target.reward;
-            if (Math.random() < this.stats.derived.goldBonus) { reward = Math.floor(reward * 1.5); game.entities.push(new Particle(this.x, this.y - 50, "LUCKY!", "gold")); }
-            this.history.goldEarned += reward;
-            this.gold += reward;
-            game.entities.push(new Particle(this.x, this.y - 30, `+${reward}g`, "gold"));
+    behaviorKite(target, dt, game) {
+        // STAMINA CHECK
+            // Cost decreases with AGI; minimum 10 per second
+            const kiteCostPerSec = Math.max(10, 25 - (this.stats.current.AGI * 0.5));
+            const kiteCost = kiteCostPerSec * dt;
+        if (this.stamina >= kiteCost) {
+
+            // Move AWAY from target
+            const angle = Math.atan2(this.y - target.y, this.x - target.x);
+            const speed = CLASS_CONFIG[this.type].baseSpeed * this.stats.derived.moveSpeedMultiplier;
+
+            // Only consume stamina if we actually move (speed > 0)
+            if (speed > 0) {
+                this.stamina -= kiteCost;
+                this.x += Math.cos(angle) * speed * dt;
+                this.y += Math.sin(angle) * speed * dt;
+                return true; // Successfully kiting
+            }
+            return false; // Stuck/Rooted
+        } else {
+            // Out of stamina! Can't kite.
+            if (game && this.tiredCooldown <= 0) {
+                game.entities.push(new Particle(this.x, this.y - 40, "TIRED", "gray"));
+                this.tiredCooldown = 2.0; // 2 seconds cooldown
+            }
+            return false; // Failed to kite
+        }
+    }
+
+    behaviorShop(dt, game) {
+        if (!this.target || this.target.remove) {
+            const markets = game.entities.filter(e => e.constructor.name === 'EconomicBuilding' && e.type === 'MARKET' && !e.remove);
+            if (markets.length === 0) { this.state = 'IDLE'; return; }
+            this.target = markets.sort((a, b) => Utils.dist(this.x, this.y, a.x, a.y) - Utils.dist(this.x, this.y, b.x, b.y))[0];
+        }
+
+        const door = { x: this.target.x, y: this.target.y + (this.target.height/2) - 5 };
+        const dist = Utils.dist(this.x, this.y, door.x, door.y);
+
+        if (this.visible && dist < 18) {
+            if (this.target.enter) {
+                this.target.enter(this);
+                if (this.shopTimer <= 0) this.shopTimer = 3.0;
+            }
+        } else if (this.visible) {
+            this.moveTowards(door.x, door.y, dt);
+        }
+
+        if (!this.visible && this.shopTimer > 0) {
+            this.shopTimer -= dt;
+            if (this.shopTimer <= 0) {
+                this.lastShopTime = game.gameTime;
+                if (this.target && this.target.exit) this.target.exit(this);
+                this.state = 'IDLE';
+                this.target = null;
+            }
         }
     }
 
     checkPotionUsage(game) {
         // Only use potions when visible and not resting in a building
         if (!this.visible) return;
-        
+
         // Don't use potions if we're already retreating to heal
         // (Let the building heal us for free instead)
         if (this.state === 'RETREAT') return;
-        
+
         // Calculate drink threshold based on personality
         // Formula: Base 40% HP * personality modifier
         // - Brave heroes (1.0): Drink at 40% HP (efficient)
@@ -181,26 +472,26 @@ export class Hero {
         const baseDrinkPercent = 0.40;
         const personalityModifier = (2 - this.personality.brave);
         const drinkThreshold = this.maxHp * baseDrinkPercent * personalityModifier;
-        
+
         // Check: HP low enough AND we have a potion
         if (this.hp < drinkThreshold && this.inventory.hasPotion()) {
             const potion = this.inventory.usePotion();
-            
+
             if (potion) {
                 // Heal the hero
                 const healAmount = potion.healAmount || 50;
                 const oldHp = this.hp;
                 this.hp = Math.min(this.hp + healAmount, this.maxHp);
                 const actualHeal = this.hp - oldHp;
-                
+
                 // Visual feedback
                 game.entities.push(new Particle(
-                    this.x, 
-                    this.y - 40, 
-                    `+${Math.floor(actualHeal)} HP`, 
+                    this.x,
+                    this.y - 40,
+                    `+ ${Math.floor(actualHeal)} HP`,
                     "#2ecc71"
                 ));
-                
+
                 // Optional: Add a "gulp" sound effect trigger here
                 // game.playSound('potion_drink');
             }
@@ -209,17 +500,17 @@ export class Hero {
 
     dropPotions(game) {
         const potions = this.inventory.getAllPotions();
-        
+
         // Drop each potion as a lootable ItemDrop entity
         potions.forEach((potion, index) => {
             // Scatter drops in a small circle around the hero
             const angle = (Math.PI * 2 / potions.length) * index;
             const dropX = this.x + Math.cos(angle) * 20;
             const dropY = this.y + Math.sin(angle) * 20;
-            
+
             game.entities.push(new ItemDrop(dropX, dropY, potion.type));
         });
-        
+
         // Clear the hero's inventory
         this.inventory.clearPotions();
     }
@@ -228,21 +519,23 @@ export class Hero {
         let damage = this.stats.derived.meleeDamage;
         if (Math.random() < this.stats.derived.critChance) { damage *= 2; game.entities.push(new Particle(this.x, this.y - 30, "CRIT!", "#ff00ff")); }
         // Pass 'this' as source so monsters know who attacked them
-        if (CLASS_CONFIG[this.type].isRanged) { 
-            game.entities.push(new Projectile(this.x, this.y, this.target, damage, this)); 
+        if (CLASS_CONFIG[this.type].isRanged) {
+            game.entities.push(new Projectile(this.x, this.y, this.target, damage, this));
         }
-        else { 
-            this.target.takeDamage(damage, game, this); 
+        else {
+            this.target.takeDamage(damage, game, this);
         }
     }
 
     takeDamage(amount, game, source = null) {
         this.lastDamageTime = game.gameTime;
-        if (Math.random() < this.stats.derived.dodgeChance) { if(game) game.entities.push(new Particle(this.x, this.y - 20, "DODGE", "cyan")); return; }
-        if (Math.random() < this.stats.derived.parryChance) { amount *= 0.5; if(game) game.entities.push(new Particle(this.x, this.y - 20, "PARRY", "white")); }
+        let dodge = this.stats.derived.dodgeChance;
+        if (this.skillActive && this.skillActive.dodgeBonus) dodge += this.skillActive.dodgeBonus;
+        if (Math.random() < dodge) { if (game) game.entities.push(new Particle(this.x, this.y - 20, "DODGE", "cyan")); return; }
+        if (Math.random() < this.stats.derived.parryChance) { amount *= 0.5; if (game) game.entities.push(new Particle(this.x, this.y - 20, "PARRY", "white")); }
         this.hp -= amount; this.history.timesWounded++;
         if (game) game.entities.push(new Particle(this.x, this.y - 20, "-" + Math.floor(amount), "red"));
-        
+
         // NEW: Drop potions on death
         if (this.hp <= 0) {
             this.dropPotions(game);
@@ -258,39 +551,98 @@ export class Hero {
         this.level++; this.xp = 0; this.xpToNextLevel = Math.floor(this.xpToNextLevel * 1.5);
         this.stats.level = this.level; this.stats.update();
         this.maxHp = this.stats.derived.maxHP; this.hp = this.maxHp;
+        this.maxStamina = Math.floor(this.stats.derived.staminaMax);
+        this.staminaRegen = this.stats.derived.staminaRegen;
+        this.stamina = this.maxStamina;
+        if (this.type === 'RANGER' && !this.skills.some(s => s.id === 'ranger_cantcatchme')) {
+            this.skills.push({
+                id: 'ranger_cantcatchme',
+                name: "Can't Catch Me",
+                description: 'Burst of speed and evasion to keep range.',
+                staminaCost: 50,
+                cooldown: 10,
+                durationBase: 2,
+                durationPerLevel: 0.1,
+                durationMax: 4,
+                speedMult: 1.5,
+                dodgeBonus: 0.15,
+                lastUsed: -100
+            });
+        }
         game.entities.push(new Particle(this.x, this.y - 40, "LEVEL UP!", "#00ffff"));
     }
 
     moveTowards(tx, ty, dt) {
-        const speed = CLASS_CONFIG[this.type].baseSpeed * this.stats.derived.moveSpeedMultiplier;
+        const speed = CLASS_CONFIG[this.type].baseSpeed * this.stats.derived.moveSpeedMultiplier * (this.skillActive?.speedMult || 1);
         const angle = Math.atan2(ty - this.y, tx - this.x);
         this.x += Math.cos(angle) * speed * dt;
         this.y += Math.sin(angle) * speed * dt;
     }
-    
+
+    cooldownRemaining(skill, game) {
+        return Math.max(0, (skill.lastUsed || -100) + skill.cooldown - game.gameTime);
+    }
+
+    canUseSkill(skill, game) {
+        return this.stamina >= skill.staminaCost && this.cooldownRemaining(skill, game) <= 0;
+    }
+
+    useSkill(skill, game) {
+        this.stamina -= skill.staminaCost;
+        skill.lastUsed = game.gameTime;
+        const dur = Math.min(skill.durationMax, skill.durationBase + skill.durationPerLevel * this.level);
+        this.skillActive = { speedMult: skill.speedMult, dodgeBonus: skill.dodgeBonus, activeUntil: game.gameTime + dur };
+        game.entities.push(new Particle(this.x, this.y - 40, skill.name, "cyan"));
+    }
+
     wander(dt, game) {
+        // Fix: Initialize wanderTimer if undefined or invalid
+        if (typeof this.wanderTimer !== 'number' || isNaN(this.wanderTimer)) {
+            this.wanderTimer = 0;
+        }
+
+        // Fix: Initialize wanderTarget if undefined
+        if (!this.wanderTarget) {
+            this.wanderTarget = { x: this.x, y: this.y };
+        }
+
         this.wanderTimer -= dt;
         if (this.wanderTimer <= 0) {
-            this.wanderTarget.x = Math.max(0, Math.min(game.canvas.width, this.x + Utils.rand(-100, 100)));
-            this.wanderTarget.y = Math.max(0, Math.min(game.canvas.height, this.y + Utils.rand(-100, 100)));
+            // Fix: Safety check for canvas dimensions
+            const bounds = {
+                width: (game.canvas && game.canvas.width) || 800,
+                height: (game.canvas && game.canvas.height) || 600
+            };
+
+            this.wanderTarget.x = Math.max(0, Math.min(bounds.width, this.x + Utils.rand(-100, 100)));
+            this.wanderTarget.y = Math.max(0, Math.min(bounds.height, this.y + Utils.rand(-100, 100)));
             this.wanderTimer = 3;
         }
-        if (Utils.dist(this.x, this.y, this.wanderTarget.x, this.wanderTarget.y) > 10) {
+
+        const dist = Utils.dist(this.x, this.y, this.wanderTarget.x, this.wanderTarget.y);
+        if (!isNaN(dist) && dist > 10) {
             this.moveTowards(this.wanderTarget.x, this.wanderTarget.y, dt);
         }
     }
 
     maintainSpace(entities, dt) {
+        const pushSpeed = 50 * dt;
         entities.forEach(e => {
             if (e === this || e.remove) return;
-            if (e instanceof Hero || e.constructor.name === 'Monster') {
+            // Only collide with other units (Heroes and Monsters)
+            const isUnit = e instanceof Hero || e.constructor.name === 'Monster';
+            if (isUnit) {
                 const dist = Utils.dist(this.x, this.y, e.x, e.y);
-                const combinedRadii = this.radius + (e.radius || 15);
-                if (dist < combinedRadii && dist > 0) {
-                    const pushStrength = 50 * dt;
+                const minGap = this.radius + e.radius;
+
+                // Soft Collision: Push away if too close, but not instantly
+                if (dist < minGap && dist > 0) {
+                    const overlap = minGap - dist;
+                    const force = Math.min(overlap * 2, 10) * dt; // Proportional force, clamped
                     const angle = Math.atan2(this.y - e.y, this.x - e.x);
-                    this.x += Math.cos(angle) * pushStrength;
-                    this.y += Math.sin(angle) * pushStrength;
+
+                    this.x += Math.cos(angle) * force * 10; // Adjust multiplier for feel
+                    this.y += Math.sin(angle) * force * 10;
                 }
             }
         });
@@ -300,14 +652,18 @@ export class Hero {
         if (!this.visible) return;
 
         Utils.drawSprite(ctx, 'hero', this.x, this.y, 20 + (this.level), this.color);
+        // HP bar
         ctx.fillStyle = 'red'; ctx.fillRect(this.x - 10, this.y - 25, 20, 4);
         ctx.fillStyle = '#2ecc71'; ctx.fillRect(this.x - 10, this.y - 25, 20 * (this.hp / this.maxHp), 4);
+        // STAMINA bar (physical classes emphasized)
+        ctx.fillStyle = '#444'; ctx.fillRect(this.x - 10, this.y - 20, 20, 3);
+        ctx.fillStyle = '#00bfff'; ctx.fillRect(this.x - 10, this.y - 20, 20 * (this.stamina / this.maxStamina), 3);
         ctx.save(); ctx.fillStyle = 'white'; ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center'; ctx.strokeStyle = 'black'; ctx.lineWidth = 2;
         const text = `${this.name} (Lv.${this.level})`;
         ctx.strokeText(text, this.x, this.y - 32); ctx.fillText(text, this.x, this.y - 32);
-        if (this.personality.brave < 0.4) { ctx.fillStyle='red'; ctx.fillRect(this.x-12, this.y-42, 4, 4); }
-        if (this.personality.greedy > 0.7) { ctx.fillStyle='gold'; ctx.fillRect(this.x-2, this.y-42, 4, 4); }
-        if (this.personality.smart > 0.7) { ctx.fillStyle='cyan'; ctx.fillRect(this.x+8, this.y-42, 4, 4); }
+        if (this.personality.brave < 0.4) { ctx.fillStyle = 'red'; ctx.fillRect(this.x - 12, this.y - 42, 4, 4); }
+        if (this.personality.greedy > 0.7) { ctx.fillStyle = 'gold'; ctx.fillRect(this.x - 2, this.y - 42, 4, 4); }
+        if (this.personality.smart > 0.7) { ctx.fillStyle = 'cyan'; ctx.fillRect(this.x + 8, this.y - 42, 4, 4); }
         ctx.restore();
     }
 }

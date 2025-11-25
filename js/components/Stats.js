@@ -53,6 +53,11 @@ export class Stats {
         this.derived.critChance = this.current.LUK * 0.006;
         this.derived.goldBonus = this.current.LUK * 0.01;
         this.derived.fateChance = this.current.LUK * 0.002;
+
+        // STAMINA: Endurance system (Physical classes benefit more)
+        const classBonus = this.classType === 'WARRIOR' ? 30 : (this.classType === 'RANGER' ? 20 : 10);
+        this.derived.staminaMax = 100 + (this.current.VIT * 15) + (this.current.AGI * 5) + classBonus;
+        this.derived.staminaRegen = 5 + (this.current.VIT * 0.4) + (this.current.WIL * 0.2);
     }
     
     calculateMeleeDamage() {

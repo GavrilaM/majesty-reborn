@@ -10,7 +10,7 @@ export class EconomicBuilding {
         this.y = y;
         this.type = type;
         this.game = game; // NEW: Store reference to game for transactions
-        
+
         const config = BUILDING_CONFIG[type];
         this.name = config.name;
         this.width = config.width;
@@ -18,25 +18,25 @@ export class EconomicBuilding {
         this.maxHp = config.hp;
         this.hp = this.maxHp;
         this.color = config.color;
-        
+
         this.attackRange = config.attackRange || 0;
         this.damage = config.damage || 0;
         this.attackCooldown = 0;
         this.tradeTimer = 0;
         this.heroesNearby = 0;
-        
-        this.visitors = []; 
+
+        this.visitors = [];
         this.remove = false;
     }
 
     update(dt, game) {
-        if (this.hp <= 0) { 
-            this.remove = true; 
+        if (this.hp <= 0) {
+            this.remove = true;
             this.visitors.forEach(hero => {
                 hero.visible = true;
                 hero.state = 'IDLE';
             });
-            return; 
+            return;
         }
 
         // --- CRITICAL FIX: CLEANUP DEAD VISITORS ---
@@ -47,7 +47,7 @@ export class EconomicBuilding {
         if (this.visitors.length > 0) {
             this.visitors.forEach(hero => {
                 if (hero.hp < hero.maxHp) {
-                    hero.hp += 20 * dt; 
+                    hero.hp += 20 * dt;
                     if (hero.hp >= hero.maxHp) hero.hp = hero.maxHp;
                 }
             });
@@ -61,7 +61,7 @@ export class EconomicBuilding {
         if (!this.visitors.includes(hero)) {
             this.visitors.push(hero);
             hero.visible = false;
-            
+
             // NEW: If this is a Market, attempt to sell potions
             if (this.type === 'MARKET') {
                 this.attemptPotionSale(hero);
@@ -73,48 +73,47 @@ export class EconomicBuilding {
         const idx = this.visitors.indexOf(hero);
         if (idx !== -1) {
             this.visitors.splice(idx, 1);
-            hero.visible = true; 
+            hero.visible = true;
             hero.x = this.x;
-            hero.y = this.y + (this.height/2) + 15; // Spawn at feet
+            hero.y = this.y + (this.height / 2) + 15; // Spawn at feet
         }
     }
 
     attemptPotionSale(hero) {
         const potionCost = ITEM_CONFIG.POTION.cost; // 30g
         const playerProfit = 10; // Player gets 10g tax per sale
-        
+
         // Purchase conditions (ALL must be true):
         // 1. Hero needs healing (not at full HP)
         // 2. Hero has enough gold
         // 3. Hero's belt has an empty slot
-        const needsHealing = hero.hp < hero.maxHp;
         const canAfford = hero.gold >= potionCost;
         const hasSpace = !hero.inventory.isBeltFull();
-        
+
         // PERSONALITY FACTOR: How many potions to buy?
         // - Cowardly heroes: Try to fill belt (buy 2 if possible)
         // - Brave heroes: Buy 1 only
         // - Smart heroes: Calculate based on HP deficit
         const targetPotions = this.calculatePotionsToBuy(hero);
-        
+
         // Attempt to buy potions until belt is full or conditions fail
         let purchaseCount = 0;
-        while (purchaseCount < targetPotions && 
-               hero.hp < hero.maxHp && 
-               hero.gold >= potionCost && 
-               !hero.inventory.isBeltFull()) {
-            
+        while (purchaseCount < targetPotions &&
+            hero.gold >= potionCost &&
+            !hero.inventory.isBeltFull()) {
+
             // Transaction successful
             hero.gold -= potionCost;
+            // console.log(`Hero bought potion. Gold: ${hero.gold}`); // Debug
             const success = hero.inventory.addPotion({
                 type: 'POTION',
                 name: ITEM_CONFIG.POTION.name,
                 healAmount: ITEM_CONFIG.POTION.healAmount
             });
-            
+
             if (success) {
                 purchaseCount++;
-                
+
                 // Player gets tax profit
                 if (this.game) {
                     this.game.gold += playerProfit;
@@ -124,14 +123,14 @@ export class EconomicBuilding {
                 break;
             }
         }
-        
+
         // Visual feedback if any purchases were made
         if (purchaseCount > 0 && this.game) {
             const totalProfit = purchaseCount * playerProfit;
             this.game.entities.push(new Particle(
-                this.x, 
-                this.y - 30, 
-                `+${totalProfit}g`, 
+                this.x,
+                this.y - 30,
+                `+${totalProfit}g`,
                 "yellow"
             ));
         }
@@ -142,19 +141,19 @@ export class EconomicBuilding {
         if (hero.personality.brave < 0.4) {
             return 2;
         }
-        
+
         // Very brave heroes only buy 1 (minimal insurance)
         if (hero.personality.brave > 0.8) {
             return 1;
         }
-        
+
         // Smart heroes calculate based on HP deficit
         if (hero.personality.smart > 0.7) {
             const hpMissing = hero.maxHp - hero.hp;
             const potionsNeeded = Math.ceil(hpMissing / 50); // 50 HP per potion
             return Math.min(potionsNeeded, 2); // Cap at 2 (belt capacity)
         }
-        
+
         // Default: Buy 1 potion
         return 1;
     }
@@ -190,7 +189,7 @@ export class EconomicBuilding {
 
         if (count > 0) {
             this.tradeTimer += dt;
-            if (this.tradeTimer > 1.0) { 
+            if (this.tradeTimer > 1.0) {
                 this.tradeTimer = 0;
                 const profit = count * 1;
                 game.gold += profit;
@@ -206,40 +205,48 @@ export class EconomicBuilding {
     draw(ctx) {
         ctx.save();
         ctx.translate(this.x, this.y);
-        
+
         // Building Body
         ctx.fillStyle = this.color;
-        ctx.fillRect(-this.width/2, -this.height/2, this.width, this.height);
-        
+        ctx.fillRect(-this.width / 2, -this.height / 2, this.width, this.height);
+
         // Roof (Depth effect)
         ctx.fillStyle = '#333';
         ctx.beginPath();
-        ctx.moveTo(-this.width/2 - 5, -this.height/2);
-        ctx.lineTo(0, -this.height/2 - 20);
-        ctx.lineTo(this.width/2 + 5, -this.height/2);
+        ctx.moveTo(-this.width / 2 - 5, -this.height / 2);
+        ctx.lineTo(0, -this.height / 2 - 20);
+        ctx.lineTo(this.width / 2 + 5, -this.height / 2);
         ctx.fill();
 
         // Door
         ctx.fillStyle = this.visitors.length > 0 ? '#000' : '#222';
-        ctx.fillRect(-10, this.height/2 - 20, 20, 20);
+        ctx.fillRect(-10, this.height / 2 - 20, 20, 20);
 
         ctx.restore();
 
         if (this.hp < this.maxHp) {
             const barWidth = 40;
-            const barY = this.y - (this.height/2) - 25;
+            const barY = this.y - (this.height / 2) - 25;
             ctx.fillStyle = 'black';
-            ctx.fillRect(this.x - barWidth/2, barY, barWidth, 5);
+            ctx.fillRect(this.x - barWidth / 2, barY, barWidth, 5);
             const pct = Math.max(0, this.hp / this.maxHp);
             ctx.fillStyle = pct > 0.5 ? 'lime' : 'red';
-            ctx.fillRect(this.x - barWidth/2, barY, barWidth * pct, 5);
+            ctx.fillRect(this.x - barWidth / 2, barY, barWidth * pct, 5);
         }
-        
+
+        // SHOPPING INDICATOR
+        if (this.type === 'MARKET' && this.visitors.length > 0) {
+            ctx.font = '20px Arial';
+            ctx.fillStyle = 'gold';
+            ctx.textAlign = 'center';
+            ctx.fillText('💰', this.x, this.y - this.height / 2 - 20);
+        }
+
         if (this.visitors.length > 0) {
             ctx.fillStyle = 'white';
             ctx.font = '10px Arial';
             ctx.textAlign = 'center';
-            ctx.fillText(`${this.visitors.length}`, this.x, this.y + 5); 
+            ctx.fillText(`${this.visitors.length}`, this.x, this.y + 5);
         }
     }
 }
