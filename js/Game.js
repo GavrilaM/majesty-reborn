@@ -8,6 +8,8 @@ import { EconomicBuilding } from './entities/EconomicBuilding.js';
 import { ItemDrop } from './entities/ItemDrop.js';
 import { UIManager } from './managers/UIManager.js';
 import { BuildManager } from './managers/BuildManager.js';
+import { Worker } from './entities/Worker.js';
+import { CastleGuard } from './entities/CastleGuard.js';
 import { Utils } from './utils.js';
 
 class Game {
@@ -36,9 +38,24 @@ class Game {
             this.mouseY = e.clientY - rect.top;
         });
         this.castle = new EconomicBuilding(this.canvas.width / 2, this.canvas.height / 2, 'CASTLE', this);
+        this.castle.constructed = true;
+        this.castle.isUnderConstruction = false;
+        this.castle.level = 1;
         this.entities.push(this.castle);
+        this.spawnInitialNPCs();
         this.setupInputs();
         this.loop(0);
+    }
+
+    spawnInitialNPCs() {
+        const c = this.castle;
+        const w1 = new Worker(c.x + 30, c.y + 60);
+        this.entities.push(w1);
+        const guardCount = 1;
+        for (let i = 0; i < guardCount; i++) {
+            const g = new CastleGuard(c.x - 40 + i * 30, c.y + 40);
+            this.entities.push(g);
+        }
     }
 
     // ... (Keep setupInputs, resize, recruit, toggleFlagMode, handleClick, updateUI) ...
@@ -94,6 +111,7 @@ class Game {
         const candidates = this.entities.filter(ent => {
             if (ent instanceof Hero) return Utils.dist(x, y, ent.x, ent.y) < ent.radius + 10;
             if (ent.constructor.name === 'Monster') return Utils.dist(x, y, ent.x, ent.y) < ent.radius + 10;
+            if (ent.constructor.name === 'Worker' || ent.constructor.name === 'CastleGuard') return Utils.dist(x, y, ent.x, ent.y) < (ent.radius || 12) + 10;
             if (ent instanceof EconomicBuilding) return Math.abs(x - ent.x) < ent.width / 2 + 5 && Math.abs(y - ent.y) < ent.height / 2 + 5;
             return false;
         });

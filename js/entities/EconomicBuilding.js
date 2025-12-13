@@ -27,24 +27,31 @@ export class EconomicBuilding {
 
         this.visitors = [];
         this.remove = false;
+        this.constructed = type === 'CASTLE';
+        this.isUnderConstruction = !this.constructed;
     }
 
     update(dt, game) {
         if (this.hp <= 0) {
-            this.remove = true;
-            this.visitors.forEach(hero => {
-                hero.visible = true;
-                hero.state = 'IDLE';
-            });
-            return;
+            // If fully built, 0 HP means destroyed; otherwise it's just unconstructed
+            if (this.constructed) {
+                this.remove = true;
+                this.visitors.forEach(hero => {
+                    hero.visible = true;
+                    hero.state = 'IDLE';
+                });
+                return;
+            } else {
+                // Keep under construction at 0 HP
+                this.hp = 0;
+            }
         }
 
         // --- CRITICAL FIX: CLEANUP DEAD VISITORS ---
         // If a hero dies inside (e.g. poison, projectile impact after entry), remove them
         this.visitors = this.visitors.filter(h => !h.remove && h.hp > 0);
 
-        // HEAL VISITORS
-        if (this.visitors.length > 0) {
+        if (this.constructed && this.visitors.length > 0) {
             this.visitors.forEach(hero => {
                 if (hero.hp < hero.maxHp) {
                     hero.hp += 20 * dt;
@@ -53,19 +60,20 @@ export class EconomicBuilding {
             });
         }
 
-        if (this.type === 'TOWER') this.updateTowerDefense(dt, game);
-        if (this.type === 'MARKET') this.updateMarketTrade(dt, game);
+        if (this.constructed && this.type === 'TOWER') this.updateTowerDefense(dt, game);
+        if (this.constructed && this.type === 'MARKET') this.updateMarketTrade(dt, game);
     }
 
     enter(hero) {
+        if (!this.constructed) return;
         if (!this.visitors.includes(hero)) {
             this.visitors.push(hero);
             hero.visible = false;
 
             // NEW: If this is a Market, attempt to sell potions
-            if (this.type === 'MARKET') {
-                this.attemptPotionSale(hero);
-            }
+        if (this.type === 'MARKET') {
+            this.attemptPotionSale(hero);
+        }
         }
     }
 
@@ -209,6 +217,20 @@ export class EconomicBuilding {
         // Building Body
         ctx.fillStyle = this.color;
         ctx.fillRect(-this.width / 2, -this.height / 2, this.width, this.height);
+        if (!this.constructed) {
+            ctx.globalAlpha = 0.5;
+            ctx.fillStyle = '#777';
+            ctx.fillRect(-this.width / 2, -this.height / 2, this.width, this.height);
+            ctx.globalAlpha = 1.0;
+            // Hatch lines
+            ctx.strokeStyle = '#bbb';
+            for (let i = -this.width; i < this.width; i += 10) {
+                ctx.beginPath();
+                ctx.moveTo(i, -this.height / 2);
+                ctx.lineTo(i + this.height, this.height / 2);
+                ctx.stroke();
+            }
+        }
 
         // Roof (Depth effect)
         ctx.fillStyle = '#333';
@@ -235,7 +257,7 @@ export class EconomicBuilding {
         }
 
         // SHOPPING INDICATOR
-        if (this.type === 'MARKET' && this.visitors.length > 0) {
+        if (this.type === 'MARKET' && this.constructed && this.visitors.length > 0) {
             ctx.font = '20px Arial';
             ctx.fillStyle = 'gold';
             ctx.textAlign = 'center';

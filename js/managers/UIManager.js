@@ -90,6 +90,14 @@ export class UIManager {
             if (entity.type === 'GUILD') this.renderButtons('GUILD');
             else if (entity.type === 'MARKET') this.renderButtons('MARKET');
             else this.renderButtons('BUILDING');
+            // Recruitment panel only for GUILD
+            const rqPanel = document.getElementById('bld-recruit');
+            if (rqPanel) rqPanel.style.display = entity.type === 'GUILD' ? 'block' : 'none';
+        }
+        else if (entity.constructor.name === 'Worker' || entity.constructor.name === 'CastleGuard') {
+            if (this.viewMonster) this.viewMonster.classList.remove('hidden');
+            this.renderButtons('HERO');
+            this.updateNPCData(entity);
         }
     }
 
@@ -288,6 +296,29 @@ export class UIManager {
         }
     }
 
+    updateNPCData(npc) {
+        const nameEl = document.getElementById('mon-name');
+        if (nameEl) nameEl.innerText = npc.name || (npc.constructor.name === 'Worker' ? 'Worker' : 'Castle Guard');
+        const typeEl = document.getElementById('mon-type');
+        if (typeEl) typeEl.innerText = npc.constructor.name === 'Worker' ? 'Civilian' : 'Guard';
+        const hpText = document.getElementById('mon-hp-text');
+        if (hpText) hpText.innerText = `${Math.floor(npc.hp)}/${Math.floor(npc.maxHp)}`;
+        const hpBar = document.getElementById('mon-hp-bar');
+        if (hpBar) { hpBar.style.width = (npc.hp / npc.maxHp) * 100 + '%'; hpBar.style.background = '#2ecc71'; }
+        const portrait = document.getElementById('mon-portrait');
+        if (portrait) portrait.style.backgroundColor = npc.color;
+        const statsEl = document.getElementById('mon-stats');
+        if (statsEl) {
+            statsEl.innerHTML = `
+                <div class="stat-item"><span>Speed</span> <span class="stat-val">${Math.floor(npc.speed || 50)}</span></div>
+                <div class="stat-item"><span>DMG</span> <span class="stat-val">${Math.floor(npc.damage || 0)}</span></div>
+                <div class="stat-item"><span>Dodge</span> <span class="stat-val">${((npc.dodgeChance||0)*100).toFixed(0)}%</span></div>
+                <div class="stat-item"><span>Parry</span> <span class="stat-val">${((npc.parryChance||0)*100).toFixed(0)}%</span></div>
+                <div class="stat-item"><span>Resist</span> <span class="stat-val">${((npc.resistPct||0)*100).toFixed(0)}%</span></div>
+            `;
+        }
+    }
+
     updateBuildingData() {
         const b = this.selectedEntity;
         if (!b) return;
@@ -296,7 +327,10 @@ export class UIManager {
         document.getElementById('bld-hp-bar').style.width = (b.hp / b.maxHp) * 100 + '%';
 
         let extraInfo = "";
-        if (b.type === 'MARKET') extraInfo = `Trade Volume: ${b.heroesNearby || 0} heroes`;
+        const pct = Math.floor((b.hp / b.maxHp) * 100);
+        if (!b.constructed) extraInfo = `Constructing: ${pct}%`;
+        else if (b.hp < b.maxHp) extraInfo = `Repairing: ${pct}%`;
+        else if (b.type === 'MARKET') extraInfo = `Trade Volume: ${b.heroesNearby || 0} heroes`;
         document.getElementById('bld-stats').innerHTML = extraInfo;
 
         // VISITOR LIST
@@ -337,19 +371,25 @@ export class UIManager {
         const rqBar = document.getElementById('bld-recruit-bar');
         const btnWarrior = document.getElementById('bld-btn-warrior');
         const btnRanger = document.getElementById('bld-btn-ranger');
-        if (btnWarrior) btnWarrior.onclick = () => this.game.recruit('WARRIOR', b);
-        if (btnRanger) btnRanger.onclick = () => this.game.recruit('RANGER', b);
+        const isGuild = b.type === 'GUILD';
+        if (btnWarrior) btnWarrior.onclick = isGuild ? (() => this.game.recruit('WARRIOR', b)) : null;
+        if (btnRanger) btnRanger.onclick = isGuild ? (() => this.game.recruit('RANGER', b)) : null;
 
-        const queue = this.game.recruitQueue.filter(item => item.source === b);
-        if (queue.length > 0) {
-            const next = queue[0];
-            const total = 2.0; // Training duration baseline
-            const pct = Math.max(0, Math.min(1, 1 - (next.timer / total)));
-            if (rqBar) rqBar.style.width = (pct * 100) + '%';
-            if (rqText) rqText.innerText = `Training ${next.type} — ${next.timer.toFixed(1)}s`; 
+        if (isGuild) {
+            const queue = this.game.recruitQueue.filter(item => item.source === b);
+            if (queue.length > 0) {
+                const next = queue[0];
+                const total = next.type === 'RANGER' ? 3.0 : 2.0;
+                const pct = Math.max(0, Math.min(1, 1 - (next.timer / total)));
+                if (rqBar) rqBar.style.width = (pct * 100) + '%';
+                if (rqText) rqText.innerText = `Training ${next.type} — ${next.timer.toFixed(1)}s`;
+            } else {
+                if (rqBar) rqBar.style.width = '0%';
+                if (rqText) rqText.innerText = 'Idle';
+            }
         } else {
             if (rqBar) rqBar.style.width = '0%';
-            if (rqText) rqText.innerText = 'Idle';
+            if (rqText) rqText.innerText = '';
         }
     }
 

@@ -91,23 +91,20 @@ export class Monster {
 
         // STEP 2: OPPORTUNITY - If a Hero gets too close (Notice Range), attack them
         // Only check if we're not locked onto a siege target
-        if ((!this.target || this.target.constructor.name !== 'Hero') && this.siegeLockTimer <= 0) {
-            let nearbyHero = null;
+        if ((!this.target || (this.target.constructor.name !== 'Hero' && this.target.constructor.name !== 'Worker' && this.target.constructor.name !== 'CastleGuard')) && this.siegeLockTimer <= 0) {
+            let nearbyUnit = null;
             let closestDist = this.noticeRange;
 
             game.entities.forEach(e => {
-                if (e.constructor.name === 'Hero' && e.visible && !e.remove && e.hp > 0) {
+                const isUnit = (e.constructor.name === 'Hero' && e.visible) || ((e.constructor.name === 'Worker' || e.constructor.name === 'CastleGuard') && e.visible);
+                if (isUnit && !e.remove && e.hp > 0) {
                     const d = Utils.dist(this.x, this.y, e.x, e.y);
-                    if (d < closestDist) {
-                        closestDist = d;
-                        nearbyHero = e;
-                    }
+                    if (d < closestDist) { closestDist = d; nearbyUnit = e; }
                 }
             });
 
-            if (nearbyHero) {
-                // Hero opportunity overrides siege lock
-                this.target = nearbyHero;
+            if (nearbyUnit) {
+                this.target = nearbyUnit;
                 this.siegeTarget = null;
                 this.siegeLockTimer = 0;
             }
@@ -201,14 +198,16 @@ export class Monster {
             if (this.attackCooldown <= 0) {
                 // Final check before attacking
                 const isHero = this.target.constructor.name === 'Hero';
-                const isValidHero = isHero && this.target.visible && this.target.hp > 0;
+                const isWorker = this.target.constructor.name === 'Worker';
+                const isGuard = this.target.constructor.name === 'CastleGuard';
+                const isValidUnit = (isHero && this.target.visible) || isWorker || isGuard;
                 const isBuilding = this.target.constructor.name === 'EconomicBuilding' ||
                     this.target.constructor.name === 'Building';
                 const isValidBuilding = isBuilding && this.target.hp > 0;
 
                 if (this.target && this.target.takeDamage &&
                     !this.target.remove &&
-                    (isValidHero || isValidBuilding)) {
+                    ((isValidUnit && this.target.hp > 0) || isValidBuilding)) {
                     this.target.takeDamage(this.damage, game, this);
                     this.attackCooldown = 1.5;
                 } else {
@@ -222,8 +221,8 @@ export class Monster {
     maintainSpace(entities, dt) {
         entities.forEach(e => {
             if (e === this || e.remove) return;
-            // Collide with Monsters and Heroes
-            const isUnit = e.constructor.name === 'Monster' || e.constructor.name === 'Hero';
+            // Collide with Monsters, Heroes, and NPC units
+            const isUnit = e.constructor.name === 'Monster' || e.constructor.name === 'Hero' || e.constructor.name === 'Worker' || e.constructor.name === 'CastleGuard';
             if (isUnit) {
                 const dist = Utils.dist(this.x, this.y, e.x, e.y);
                 const minGap = this.radius + e.radius;

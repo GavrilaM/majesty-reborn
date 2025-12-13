@@ -63,7 +63,13 @@ export class BuildManager {
         }
 
         this.game.gold -= config.cost;
-        this.game.entities.push(new EconomicBuilding(x, y, this.activeType, this.game));
+        const b = new EconomicBuilding(x, y, this.activeType, this.game);
+        if (this.activeType !== 'CASTLE') {
+            b.hp = 0;
+            b.constructed = false;
+            b.isUnderConstruction = true;
+        }
+        this.game.entities.push(b);
         
         // Stop building after placement
         // Note: UIManager handles UI updates automatically in the game loop
