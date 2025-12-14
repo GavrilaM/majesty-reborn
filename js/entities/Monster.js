@@ -29,6 +29,8 @@ export class Monster {
         this.attackCooldown = 0;
         this.target = null;
         this.decisionTimer = 0; // Balancing: Delay between actions
+        this.reactionTimer = 0;
+        this.isEngaged = false; this.engagedLockTimer = 0;
 
         // AGGRO SYSTEM
         this.aggroTarget = null; // Hero or Tower who damaged us (for retaliation)
@@ -43,6 +45,7 @@ export class Monster {
 
     update(dt, game) {
         if (this.attackCooldown > 0) this.attackCooldown -= dt;
+        if (this.reactionTimer > 0) { this.reactionTimer -= dt; if (this.reactionTimer > 0) return; }
 
         // BALANCING: Decision Delay
         if (this.decisionTimer > 0) {
@@ -105,6 +108,7 @@ export class Monster {
 
             if (nearbyUnit) {
                 this.target = nearbyUnit;
+                this.reactionTimer = Utils.rand(0.2, 0.7);
                 this.siegeTarget = null;
                 this.siegeLockTimer = 0;
             }
@@ -192,6 +196,7 @@ export class Monster {
             const angle = Math.atan2(this.target.y - this.y, this.target.x - this.x);
             this.x += Math.cos(angle) * this.speed * dt;
             this.y += Math.sin(angle) * this.speed * dt;
+            this.isEngaged = false; this.engagedLockTimer = 0;
         }
         else {
             // In attack range
@@ -215,6 +220,7 @@ export class Monster {
                     this.target = null;
                 }
             }
+            this.isEngaged = true; if (this.engagedLockTimer <= 0) this.engagedLockTimer = 1.0;
         }
     }
 
@@ -230,8 +236,9 @@ export class Monster {
                     const nx = (this.x - e.x) / dist;
                     const ny = (this.y - e.y) / dist;
                     const overlap = (minGap - dist);
-                    sepX += nx * overlap * 0.5;
-                    sepY += ny * overlap * 0.5;
+                    const scale = this.isEngaged ? 0.2 : 0.5;
+                    sepX += nx * overlap * scale;
+                    sepY += ny * overlap * scale;
                 }
             }
             if (e.constructor.name === 'EconomicBuilding') {

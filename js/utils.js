@@ -9,6 +9,7 @@ export const Utils = {
     perp: (x, y) => ({ x: -y, y: x }),
     mul: (x, y, s) => ({ x: x * s, y: y * s }),
     add: (ax, ay, bx, by) => ({ x: ax + bx, y: ay + by }),
+    lerp: (a, b, t) => a + (b - a) * t,
 
     drawSprite: (ctx, type, x, y, size, color) => {
         ctx.save();

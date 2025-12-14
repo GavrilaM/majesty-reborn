@@ -437,6 +437,7 @@ export class Hero {
         const door = { x: this.target.x, y: this.target.y + (this.target.height/2) - 5 };
         const dist = Utils.dist(this.x, this.y, door.x, door.y);
 
+        if (!this.target.constructed) { this.state = 'IDLE'; return; }
         if (this.visible && dist < 18) {
             if (this.target.enter) {
                 this.target.enter(this);
@@ -525,6 +526,7 @@ export class Hero {
         else {
             this.target.takeDamage(damage, game, this);
         }
+        this.actionLockTimer = 0.3;
     }
 
     takeDamage(amount, game, source = null) {
@@ -574,7 +576,9 @@ export class Hero {
     }
 
     moveTowards(tx, ty, dt) {
-        const speed = CLASS_CONFIG[this.type].baseSpeed * this.stats.derived.moveSpeedMultiplier * (this.skillActive?.speedMult || 1);
+        if (this.actionLockTimer > 0) return;
+        let speed = CLASS_CONFIG[this.type].baseSpeed * this.stats.derived.moveSpeedMultiplier * (this.skillActive?.speedMult || 1);
+        const staminaPct = this.stamina / this.maxStamina; if (staminaPct < 0.2) speed *= 0.5;
         const angle = Math.atan2(ty - this.y, tx - this.x);
         this.x += Math.cos(angle) * speed * dt;
         this.y += Math.sin(angle) * speed * dt;
@@ -638,8 +642,9 @@ export class Hero {
                     const nx = (this.x - e.x) / dist;
                     const ny = (this.y - e.y) / dist;
                     const overlap = (minGap - dist);
-                    sepX += nx * overlap * 0.5;
-                    sepY += ny * overlap * 0.5;
+                    const scale = this.isEngaged ? 0.2 : 0.5;
+                    sepX += nx * overlap * scale;
+                    sepY += ny * overlap * scale;
                 }
             }
 
@@ -679,8 +684,8 @@ export class Hero {
             this.x += sepX * dt * scale;
             this.y += sepY * dt * scale;
         } else {
-            this.x += sepX * dt;
-            this.y += sepY * dt;
+        this.x += sepX * dt;
+        this.y += sepY * dt;
         }
         }
     }
