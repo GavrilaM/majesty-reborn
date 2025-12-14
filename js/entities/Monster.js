@@ -41,6 +41,9 @@ export class Monster {
         this.siegeTarget = null; // Building we're currently sieging
         this.siegeLockTimer = 0; // How long to stick with a siege target (prevents stuttering)
         this.siegeLockDuration = 2.0; // Lock onto building for 2 seconds minimum
+        // Engagement Slots for melee attackers
+        this.engagedHeroes = new Set();
+        this.maxMeleeSlots = 4;
     }
 
     update(dt, game) {
@@ -222,6 +225,18 @@ export class Monster {
             }
             this.isEngaged = true; if (this.engagedLockTimer <= 0) this.engagedLockTimer = 1.0;
         }
+    }
+    
+    canAcceptMeleeAttacker() {
+        return this.engagedHeroes.size < this.maxMeleeSlots;
+    }
+    registerEngagement(hero) {
+        if (this.engagedHeroes.has(hero)) return true;
+        if (this.canAcceptMeleeAttacker()) { this.engagedHeroes.add(hero); return true; }
+        return false;
+    }
+    unregisterEngagement(hero) {
+        if (this.engagedHeroes.has(hero)) this.engagedHeroes.delete(hero);
     }
 
     maintainSpace(entities, dt) {

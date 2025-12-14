@@ -57,6 +57,14 @@ export class Hero {
 
         this.skills = [];
         this.skillActive = null;
+        this.actionLockTimer = 0;
+        this.isAiming = false;
+        this.aimingTimer = 0;
+        this.reactionTimer = 0;
+        this.nextState = null; this.nextTarget = null;
+        this.isEngaged = false; this.engagedLockTimer = 0;
+        this.moveBlocked = false;
+        this.victoryTimer = 0;
         if (this.type === 'RANGER') {
             this.skills.push({
                 id: 'ranger_cantcatchme',
@@ -87,6 +95,8 @@ export class Hero {
         }
 
         if (this.attackCooldown > 0) this.attackCooldown -= dt;
+        if (this.actionLockTimer > 0) this.actionLockTimer -= dt;
+        if (this.aimingTimer > 0) { this.aimingTimer -= dt; if (this.aimingTimer <= 0) this.isAiming = false; }
         if (this.tiredCooldown > 0) this.tiredCooldown -= dt;
         // STAMINA REGEN
         if (this.stamina < this.maxStamina) {
@@ -95,6 +105,11 @@ export class Hero {
 
         if (this.skillActive && game.gameTime >= this.skillActive.activeUntil) {
             this.skillActive = null;
+        }
+        if (this.reactionTimer > 0) {
+            this.reactionTimer -= dt;
+            if (this.reactionTimer > 0) return;
+            if (this.nextState) { this.state = this.nextState; this.target = this.nextTarget; this.nextState = null; this.nextTarget = null; }
         }
 
         const retreatPercent = this.stats.derived.retreatThreshold / this.personality.brave;
@@ -128,6 +143,9 @@ export class Hero {
                 break;
             case 'SHOP':
                 this.behaviorShop(dt, game);
+                break;
+            case 'VICTORY':
+                this.behaviorVictory(dt, game);
                 break;
         }
     }
@@ -186,8 +204,10 @@ export class Hero {
                 // Check if market exists
                 const hasMarket = game.entities.some(e => e.constructor.name === 'EconomicBuilding' && e.type === 'MARKET' && !e.remove);
                 if (hasMarket) {
-                    this.state = 'SHOP';
-                    this.target = null; // Will find target in behaviorShop
+                    this.nextState = 'SHOP';
+                    this.nextTarget = null; // Will find target in behaviorShop
+                    this.reactionTimer = Utils.rand(0.2, 0.7);
+                    game.entities.push(new Particle(this.x, this.y - 30, "!", "white"));
                     return;
                 }
             }
@@ -200,11 +220,10 @@ export class Hero {
         const target = this.findPreferredTarget(nearbyMonsters);
 
         if (target) {
-            this.state = 'FIGHT';
-            this.target = target;
-            // Emote based on personality
-            if (this.personality.brave > 0.8) game.entities.push(new Particle(this.x, this.y - 30, "CHARGE!", "red"));
-            this.decisionTimer = Utils.rand(0.5, 1.0); // Pause before engaging
+            this.nextState = 'FIGHT';
+            this.nextTarget = target;
+            game.entities.push(new Particle(this.x, this.y - 30, "!", "white"));
+            this.reactionTimer = Utils.rand(0.2, 0.7);
             return;
         }
 
@@ -361,6 +380,13 @@ export class Hero {
             if (this.target && this.target.hp <= 0) {
                 this.history.kills++;
                 this.gainXp(this.target.xpValue * this.stats.derived.xpMultiplier, game);
+                if (!CLASS_CONFIG[this.type].isRanged && this.target && this.target.unregisterEngagement) this.target.unregisterEngagement(this);
+                this.victoryTimer = Utils.rand(1.0, 2.0);
+                game.entities.push(new Particle(this.x, this.y - 30, "Victory!", "gold"));
+                const bounds = { width: game.canvas.width, height: game.canvas.height };
+                this.wanderTarget = { x: Math.max(0, Math.min(bounds.width, this.x + Utils.rand(-80, 80))), y: Math.max(0, Math.min(bounds.height, this.y + Utils.rand(-80, 80))) };
+                this.attackCooldown = 0;
+                this.state = 'VICTORY'; this.target = null; return;
             }
             this.state = 'IDLE'; this.target = null; return;
         }
@@ -374,6 +400,7 @@ export class Hero {
 
         if (dist > maxRange) {
             // Too far: Chase
+            this.isEngaged = false; this.engagedLockTimer = 0;
             this.moveTowards(this.target.x, this.target.y, dt);
         } else if (dist < minRange) {
             if (this.type === 'RANGER') {
@@ -389,12 +416,16 @@ export class Hero {
                     this.attackCooldown = this.stats.derived.attackSpeed;
                 }
             }
+            this.isEngaged = false; this.engagedLockTimer = 0;
         } else {
             // In optimal range: Attack!
             if (this.attackCooldown <= 0) {
                 this.attack(game);
                 this.attackCooldown = this.stats.derived.attackSpeed;
             }
+            if (!CLASS_CONFIG[this.type].isRanged && this.target.registerEngagement) this.target.registerEngagement(this);
+            this.isEngaged = true;
+            if (this.engagedLockTimer <= 0) this.engagedLockTimer = 1.2;
         }
     }
 
@@ -526,7 +557,8 @@ export class Hero {
         else {
             this.target.takeDamage(damage, game, this);
         }
-        this.actionLockTimer = 0.3;
+        this.actionLockTimer = 0.5;
+        if (CLASS_CONFIG[this.type].isRanged) { this.isAiming = true; this.aimingTimer = 0.5; }
     }
 
     takeDamage(amount, game, source = null) {
@@ -576,7 +608,7 @@ export class Hero {
     }
 
     moveTowards(tx, ty, dt) {
-        if (this.actionLockTimer > 0) return;
+        if (this.actionLockTimer > 0 || this.isAiming || this.moveBlocked) return;
         let speed = CLASS_CONFIG[this.type].baseSpeed * this.stats.derived.moveSpeedMultiplier * (this.skillActive?.speedMult || 1);
         const staminaPct = this.stamina / this.maxStamina; if (staminaPct < 0.2) speed *= 0.5;
         const angle = Math.atan2(ty - this.y, tx - this.x);
@@ -631,6 +663,7 @@ export class Hero {
     }
 
     maintainSpace(entities, dt) {
+        this.moveBlocked = false;
         let sepX = 0, sepY = 0;
         entities.forEach(e => {
             if (e === this || e.remove) return;
@@ -646,6 +679,13 @@ export class Hero {
                     sepX += nx * overlap * scale;
                     sepY += ny * overlap * scale;
                 }
+                // Hard-stop if ally directly ahead and too close
+                const fx = (this.target ? this.target.x : (this.wanderTarget ? this.wanderTarget.x : this.x));
+                const fy = (this.target ? this.target.y : (this.wanderTarget ? this.wanderTarget.y : this.y));
+                const dir = Utils.normalize(fx - this.x, fy - this.y);
+                const ax = e.x - this.x, ay = e.y - this.y;
+                const aheadDot = Utils.dot(dir.x, dir.y, (ax / ((dist||1))), (ay / ((dist||1))));
+                if (aheadDot > 0.6 && dist < minGap * 0.8) this.moveBlocked = true;
             }
 
             if (e.constructor.name === 'EconomicBuilding') {
@@ -675,18 +715,17 @@ export class Hero {
             this.x += sepX * dt * scale;
             this.y += sepY * dt * scale;
         } else {
-        const isRanged = CLASS_CONFIG[this.type]?.isRanged;
-        if (isRanged && this.state === 'FIGHT' && !this.skillActive && this.target) {
-            const minRange = CLASS_CONFIG[this.type].optimalRange ? CLASS_CONFIG[this.type].optimalRange[0] : 0;
-            const maxRange = CLASS_CONFIG[this.type].optimalRange ? CLASS_CONFIG[this.type].optimalRange[1] : 40;
-            const d = Utils.dist(this.x, this.y, this.target.x, this.target.y);
-            const scale = d >= minRange && d <= maxRange ? 0.1 : 1.0;
-            this.x += sepX * dt * scale;
-            this.y += sepY * dt * scale;
-        } else {
-        this.x += sepX * dt;
-        this.y += sepY * dt;
+            this.x += sepX * dt;
+            this.y += sepY * dt;
         }
+    }
+
+    behaviorVictory(dt, game) {
+        if (this.victoryTimer > 0) {
+            this.victoryTimer -= dt;
+            if (this.victoryTimer <= 0) this.state = 'IDLE';
+        } else {
+            this.state = 'IDLE';
         }
     }
 
