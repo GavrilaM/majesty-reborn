@@ -533,6 +533,7 @@ export class Hero {
         if (this.skillActive && this.skillActive.dodgeBonus) dodge += this.skillActive.dodgeBonus;
         if (Math.random() < dodge) { if (game) game.entities.push(new Particle(this.x, this.y - 20, "DODGE", "cyan")); return; }
         if (Math.random() < this.stats.derived.parryChance) { amount *= 0.5; if (game) game.entities.push(new Particle(this.x, this.y - 20, "PARRY", "white")); }
+        if (this.stats.derived.physicalResist) { amount -= amount * this.stats.derived.physicalResist; }
         this.hp -= amount; this.history.timesWounded++;
         if (game) game.entities.push(new Particle(this.x, this.y - 20, "-" + Math.floor(amount), "red"));
 
@@ -626,26 +627,62 @@ export class Hero {
     }
 
     maintainSpace(entities, dt) {
-        const pushSpeed = 50 * dt;
+        let sepX = 0, sepY = 0;
         entities.forEach(e => {
             if (e === this || e.remove) return;
-            // Only collide with other units (Heroes and Monsters)
-            const isUnit = e instanceof Hero || e.constructor.name === 'Monster';
+            const isUnit = e.constructor.name === 'Hero' || e.constructor.name === 'Monster' || e.constructor.name === 'Worker' || e.constructor.name === 'CastleGuard';
             if (isUnit) {
                 const dist = Utils.dist(this.x, this.y, e.x, e.y);
                 const minGap = this.radius + e.radius;
-
-                // Soft Collision: Push away if too close, but not instantly
                 if (dist < minGap && dist > 0) {
-                    const overlap = minGap - dist;
-                    const force = Math.min(overlap * 2, 10) * dt; // Proportional force, clamped
-                    const angle = Math.atan2(this.y - e.y, this.x - e.x);
+                    const nx = (this.x - e.x) / dist;
+                    const ny = (this.y - e.y) / dist;
+                    const overlap = (minGap - dist);
+                    sepX += nx * overlap * 0.5;
+                    sepY += ny * overlap * 0.5;
+                }
+            }
 
-                    this.x += Math.cos(angle) * force * 10; // Adjust multiplier for feel
-                    this.y += Math.sin(angle) * force * 10;
+            if (e.constructor.name === 'EconomicBuilding') {
+                const fx = (this.target ? this.target.x : (this.wanderTarget ? this.wanderTarget.x : this.x));
+                const fy = (this.target ? this.target.y : (this.wanderTarget ? this.wanderTarget.y : this.y));
+                const dir = Utils.normalize(fx - this.x, fy - this.y);
+                const bx = e.x - this.x;
+                const by = e.y - this.y;
+                const bd = Math.hypot(bx, by);
+                if (bd < Math.max(e.width, e.height)) {
+                    const bdir = Utils.normalize(bx, by);
+                    const facing = Utils.dot(dir.x, dir.y, bdir.x, bdir.y);
+                    if (facing > 0.8) {
+                        const perp = Utils.perp(dir.x, dir.y);
+                        this.x += perp.x * 15 * dt;
+                        this.y += perp.y * 15 * dt;
+                    }
                 }
             }
         });
+        const isRanged = CLASS_CONFIG[this.type]?.isRanged;
+        if (isRanged && this.state === 'FIGHT' && !this.skillActive && this.target) {
+            const minRange = CLASS_CONFIG[this.type].optimalRange ? CLASS_CONFIG[this.type].optimalRange[0] : 0;
+            const maxRange = CLASS_CONFIG[this.type].optimalRange ? CLASS_CONFIG[this.type].optimalRange[1] : 40;
+            const d = Utils.dist(this.x, this.y, this.target.x, this.target.y);
+            const scale = d >= minRange && d <= maxRange ? 0.1 : 1.0;
+            this.x += sepX * dt * scale;
+            this.y += sepY * dt * scale;
+        } else {
+        const isRanged = CLASS_CONFIG[this.type]?.isRanged;
+        if (isRanged && this.state === 'FIGHT' && !this.skillActive && this.target) {
+            const minRange = CLASS_CONFIG[this.type].optimalRange ? CLASS_CONFIG[this.type].optimalRange[0] : 0;
+            const maxRange = CLASS_CONFIG[this.type].optimalRange ? CLASS_CONFIG[this.type].optimalRange[1] : 40;
+            const d = Utils.dist(this.x, this.y, this.target.x, this.target.y);
+            const scale = d >= minRange && d <= maxRange ? 0.1 : 1.0;
+            this.x += sepX * dt * scale;
+            this.y += sepY * dt * scale;
+        } else {
+            this.x += sepX * dt;
+            this.y += sepY * dt;
+        }
+        }
     }
 
     draw(ctx) {
@@ -658,6 +695,13 @@ export class Hero {
         // STAMINA bar (physical classes emphasized)
         ctx.fillStyle = '#444'; ctx.fillRect(this.x - 10, this.y - 20, 20, 3);
         ctx.fillStyle = '#00bfff'; ctx.fillRect(this.x - 10, this.y - 20, 20 * (this.stamina / this.maxStamina), 3);
+        if (this.skillActive) {
+            ctx.strokeStyle = 'rgba(0,255,255,0.6)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius + 6, 0, Math.PI * 2);
+            ctx.stroke();
+        }
         ctx.save(); ctx.fillStyle = 'white'; ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center'; ctx.strokeStyle = 'black'; ctx.lineWidth = 2;
         const text = `${this.name} (Lv.${this.level})`;
         ctx.strokeText(text, this.x, this.y - 32); ctx.fillText(text, this.x, this.y - 32);

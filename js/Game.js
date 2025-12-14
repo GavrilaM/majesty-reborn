@@ -28,6 +28,7 @@ class Game {
         this.ui = new UIManager(this);
         this.builder = new BuildManager(this);
         this.recruitQueue = []; // PACING: Queue for hero training
+        this.npcRespawns = [];
         this.resize();
         window.addEventListener('resize', () => this.resize());
         this.mouseX = 0;
@@ -56,6 +57,10 @@ class Game {
             const g = new CastleGuard(c.x - 40 + i * 30, c.y + 40);
             this.entities.push(g);
         }
+    }
+
+    queueNpcRespawn(type, delay = 15) {
+        this.npcRespawns.push({ type, timer: delay });
     }
 
     // ... (Keep setupInputs, resize, recruit, toggleFlagMode, handleClick, updateUI) ...
@@ -177,6 +182,21 @@ class Game {
 
                 this.entities.push(new Hero(spawnX, spawnY, nextRecruit.type));
                 this.entities.push(new Particle(spawnX, spawnY - 40, "Ready!", "lime"));
+            }
+        }
+
+        // NPC Respawns
+        if (this.npcRespawns.length > 0) {
+            for (let i = this.npcRespawns.length - 1; i >= 0; i--) {
+                const r = this.npcRespawns[i];
+                r.timer -= dt;
+                if (r.timer <= 0) {
+                    const c = this.castle;
+                    if (r.type === 'Worker') this.entities.push(new Worker(c.x + 30, c.y + 60));
+                    else if (r.type === 'CastleGuard') this.entities.push(new CastleGuard(c.x - 40, c.y + 40));
+                    this.entities.push(new Particle(c.x, c.y - 50, `${r.type} ready`, 'lime'));
+                    this.npcRespawns.splice(i, 1);
+                }
             }
         }
 

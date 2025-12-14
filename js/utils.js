@@ -2,6 +2,13 @@ export const Utils = {
     dist: (x1, y1, x2, y2) => Math.hypot(x2 - x1, y2 - y1),
     rand: (min, max) => Math.random() * (max - min) + min,
     clamp: (val, min, max) => Math.min(Math.max(val, min), max),
+    normalize: (x, y) => {
+        const l = Math.hypot(x, y) || 1; return { x: x / l, y: y / l };
+    },
+    dot: (ax, ay, bx, by) => ax * bx + ay * by,
+    perp: (x, y) => ({ x: -y, y: x }),
+    mul: (x, y, s) => ({ x: x * s, y: y * s }),
+    add: (ax, ay, bx, by) => ({ x: ax + bx, y: ay + by }),
 
     drawSprite: (ctx, type, x, y, size, color) => {
         ctx.save();

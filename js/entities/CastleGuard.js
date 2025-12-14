@@ -19,6 +19,7 @@ export class CastleGuard {
         this.attackCooldown = 0;
         this.state = 'PATROL';
         this.target = null;
+        this.lockTimer = 0;
         this.visible = true;
         this.remove = false;
     }
@@ -28,13 +29,19 @@ export class CastleGuard {
         if (this.attackCooldown > 0) this.attackCooldown -= dt;
 
         const threat = this.findNearestMonsterNearCastle(game, 220);
-        if (threat) { this.state = 'FIGHT'; this.target = threat; }
+        if (!this.target && threat) { this.state = 'FIGHT'; this.target = threat; this.lockTimer = 3.0; }
 
         if (this.state === 'FIGHT') {
-            if (!this.target || this.target.remove || this.target.hp <= 0) { this.state = 'PATROL'; this.target = null; return; }
+            if (this.lockTimer > 0) this.lockTimer -= dt;
+            if (!this.target || this.target.remove || this.target.hp <= 0) { this.state = 'PATROL'; this.target = null; this.lockTimer = 0; return; }
             const d = Utils.dist(this.x, this.y, this.target.x, this.target.y);
             if (d > 40) { this.moveTowards(this.target.x, this.target.y, dt); }
             else if (this.attackCooldown <= 0) { this.target.takeDamage(this.damage, game, this); this.attackCooldown = 1.4; }
+            // If lock expired and a closer threat to castle exists, consider switching
+            if (this.lockTimer <= 0) {
+                const t2 = this.findNearestMonsterNearCastle(game, 180);
+                if (t2 && t2 !== this.target) { this.target = t2; this.lockTimer = 2.0; }
+            }
             return;
         }
 
@@ -107,6 +114,6 @@ export class CastleGuard {
         if (this.resistPct > 0) { amount -= amount * this.resistPct; }
         this.hp -= amount;
         if (game) game.entities.push(new Particle(this.x, this.y - 20, '-' + Math.floor(amount), '#99c2ff'));
-        if (this.hp <= 0) this.remove = true;
+        if (this.hp <= 0) { this.remove = true; if (game && game.queueNpcRespawn) game.queueNpcRespawn('CastleGuard', 15); }
     }
 }

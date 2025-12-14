@@ -145,6 +145,6 @@ export class Worker {
         if (this.resistPct > 0) { amount -= amount * this.resistPct; }
         this.hp -= amount;
         if (game) game.entities.push(new Particle(this.x, this.y - 20, '-' + Math.floor(amount), 'orange'));
-        if (this.hp <= 0) this.remove = true;
+        if (this.hp <= 0) { this.remove = true; if (game && game.queueNpcRespawn) game.queueNpcRespawn('Worker', 15); }
     }
 }

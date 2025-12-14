@@ -219,25 +219,41 @@ export class Monster {
     }
 
     maintainSpace(entities, dt) {
+        let sepX = 0, sepY = 0;
         entities.forEach(e => {
             if (e === this || e.remove) return;
-            // Collide with Monsters, Heroes, and NPC units
             const isUnit = e.constructor.name === 'Monster' || e.constructor.name === 'Hero' || e.constructor.name === 'Worker' || e.constructor.name === 'CastleGuard';
             if (isUnit) {
                 const dist = Utils.dist(this.x, this.y, e.x, e.y);
                 const minGap = this.radius + e.radius;
-
-                // Soft Collision
                 if (dist < minGap && dist > 0) {
-                    const overlap = minGap - dist;
-                    const force = Math.min(overlap * 2, 10) * dt;
-                    const angle = Math.atan2(this.y - e.y, this.x - e.x);
-
-                    this.x += Math.cos(angle) * force * 10;
-                    this.y += Math.sin(angle) * force * 10;
+                    const nx = (this.x - e.x) / dist;
+                    const ny = (this.y - e.y) / dist;
+                    const overlap = (minGap - dist);
+                    sepX += nx * overlap * 0.5;
+                    sepY += ny * overlap * 0.5;
+                }
+            }
+            if (e.constructor.name === 'EconomicBuilding') {
+                const tx = this.target ? this.target.x : this.x;
+                const ty = this.target ? this.target.y : this.y;
+                const dir = Utils.normalize(tx - this.x, ty - this.y);
+                const bx = e.x - this.x;
+                const by = e.y - this.y;
+                const bd = Math.hypot(bx, by);
+                if (bd < Math.max(e.width, e.height)) {
+                    const bdir = Utils.normalize(bx, by);
+                    const facing = Utils.dot(dir.x, dir.y, bdir.x, bdir.y);
+                    if (facing > 0.8) {
+                        const perp = Utils.perp(dir.x, dir.y);
+                        this.x += perp.x * 12 * dt;
+                        this.y += perp.y * 12 * dt;
+                    }
                 }
             }
         });
+        this.x += sepX * dt;
+        this.y += sepY * dt;
     }
 
     takeDamage(amount, game, source = null) {
