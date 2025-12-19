@@ -10,6 +10,7 @@ export class EconomicBuilding {
         this.y = y;
         this.type = type;
         this.game = game; // NEW: Store reference to game for transactions
+        this.id = `${type}-${Math.random().toString(36).slice(2, 8)}`;
 
         const config = BUILDING_CONFIG[type];
         this.name = config.name;

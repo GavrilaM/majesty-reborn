@@ -15,6 +15,8 @@ export class Hero {
         this.color = type === 'WARRIOR' ? '#3498db' : '#27ae60';
         this.radius = 15;
         this.visible = true;
+        this.vel = { x: 0, y: 0 };
+        this.acc = { x: 0, y: 0 };
 
         this.name = Utils.generateFantasyName(type);
         this.personality = {
@@ -65,21 +67,11 @@ export class Hero {
         this.isEngaged = false; this.engagedLockTimer = 0;
         this.moveBlocked = false;
         this.victoryTimer = 0;
-        if (this.type === 'RANGER') {
-            this.skills.push({
-                id: 'ranger_cantcatchme',
-                name: "Can't Catch Me",
-                description: 'Burst of speed and evasion to keep range.',
-                staminaCost: 50,
-                cooldown: 10,
-                durationBase: 2,
-                durationPerLevel: 0.1,
-                durationMax: 4,
-                speedMult: 1.5,
-                dodgeBonus: 0.15,
-                lastUsed: -100
-            });
-        }
+        this.attackWindup = 0;
+        this.lungeTimer = 0;
+        this.lungeVec = { x: 0, y: 0 };
+        this.flashTimer = 0;
+        // Ranger skill disabled per Operation Combat Polish
     }
 
     update(dt, game) {
@@ -106,6 +98,9 @@ export class Hero {
         if (this.skillActive && game.gameTime >= this.skillActive.activeUntil) {
             this.skillActive = null;
         }
+        if (this.attackWindup > 0) this.attackWindup -= dt;
+        if (this.lungeTimer > 0) this.lungeTimer -= dt;
+        if (this.flashTimer > 0) this.flashTimer -= dt;
         if (this.reactionTimer > 0) {
             this.reactionTimer -= dt;
             if (this.reactionTimer > 0) return;
@@ -191,7 +186,7 @@ export class Hero {
                 }
             }
         } else {
-            this.moveTowards(this.target.x, this.target.y, dt);
+            this.moveTowards(this.target.x, this.target.y, dt, game);
         }
     }
 
@@ -262,7 +257,7 @@ export class Hero {
                 // and I'm not too close already
                 const distToLeader = Utils.dist(this.x, this.y, leader.x, leader.y);
                 if (distToLeader > 40) {
-                    this.moveTowards(leader.x, leader.y, dt);
+                        this.moveTowards(leader.x, leader.y, dt, game);
                     return; // Follow leader instead of wandering randomly
                 }
             }
@@ -286,7 +281,7 @@ export class Hero {
                     const distToCastle = Utils.dist(this.x, this.y, castle.x, castle.y);
                     if (distToCastle > 200) {
                         // Too far, patrol back
-                        this.moveTowards(castle.x, castle.y, dt);
+                        this.moveTowards(castle.x, castle.y, dt, game);
                         return;
                     }
                 }
@@ -403,10 +398,6 @@ export class Hero {
             this.isEngaged = false; this.engagedLockTimer = 0;
             this.moveTowards(this.target.x, this.target.y, dt);
         } else if (dist < minRange) {
-            if (this.type === 'RANGER') {
-                const s = this.skills.find(sk => sk.id === 'ranger_cantcatchme');
-                if (s && this.canUseSkill(s, game)) this.useSkill(s, game);
-            }
             // Too close: Kite / Reposition (Ranger behavior)
             const kiting = this.behaviorKite(this.target, dt, game);
             if (!kiting) {
@@ -419,13 +410,21 @@ export class Hero {
             this.isEngaged = false; this.engagedLockTimer = 0;
         } else {
             // In optimal range: Attack!
-            if (this.attackCooldown <= 0) {
+            if (this.attackWindup > 0) {
+                // waiting to strike
+            } else if (this.attackCooldown <= 0) {
+                // first frame in range: windup before striking
+                this.attackWindup = 0.5;
+            }
+            if (this.attackCooldown <= 0 && this.attackWindup <= 0) {
                 this.attack(game);
                 this.attackCooldown = this.stats.derived.attackSpeed;
             }
             if (!CLASS_CONFIG[this.type].isRanged && this.target.registerEngagement) this.target.registerEngagement(this);
             this.isEngaged = true;
             if (this.engagedLockTimer <= 0) this.engagedLockTimer = 1.2;
+            this.vel.x = 0; this.vel.y = 0;
+            this.acc.x = 0; this.acc.y = 0;
         }
     }
 
@@ -475,7 +474,7 @@ export class Hero {
                 if (this.shopTimer <= 0) this.shopTimer = 3.0;
             }
         } else if (this.visible) {
-            this.moveTowards(door.x, door.y, dt);
+            this.moveTowards(door.x, door.y, dt, game);
         }
 
         if (!this.visible && this.shopTimer > 0) {
@@ -559,6 +558,12 @@ export class Hero {
         }
         this.actionLockTimer = 0.5;
         if (CLASS_CONFIG[this.type].isRanged) { this.isAiming = true; this.aimingTimer = 0.5; }
+        // Lunge forward a bit
+        if (this.target) {
+            const ang = Math.atan2(this.target.y - this.y, this.target.x - this.x);
+            this.lungeVec = { x: Math.cos(ang) * 4, y: Math.sin(ang) * 4 };
+            this.lungeTimer = 0.12;
+        }
     }
 
     takeDamage(amount, game, source = null) {
@@ -570,6 +575,7 @@ export class Hero {
         if (this.stats.derived.physicalResist) { amount -= amount * this.stats.derived.physicalResist; }
         this.hp -= amount; this.history.timesWounded++;
         if (game) game.entities.push(new Particle(this.x, this.y - 20, "-" + Math.floor(amount), "red"));
+        this.flashTimer = 0.06;
 
         // NEW: Drop potions on death
         if (this.hp <= 0) {
@@ -589,31 +595,34 @@ export class Hero {
         this.maxStamina = Math.floor(this.stats.derived.staminaMax);
         this.staminaRegen = this.stats.derived.staminaRegen;
         this.stamina = this.maxStamina;
-        if (this.type === 'RANGER' && !this.skills.some(s => s.id === 'ranger_cantcatchme')) {
-            this.skills.push({
-                id: 'ranger_cantcatchme',
-                name: "Can't Catch Me",
-                description: 'Burst of speed and evasion to keep range.',
-                staminaCost: 50,
-                cooldown: 10,
-                durationBase: 2,
-                durationPerLevel: 0.1,
-                durationMax: 4,
-                speedMult: 1.5,
-                dodgeBonus: 0.15,
-                lastUsed: -100
-            });
-        }
+        // Ranger skill disabled per Operation Combat Polish
         game.entities.push(new Particle(this.x, this.y - 40, "LEVEL UP!", "#00ffff"));
     }
 
-    moveTowards(tx, ty, dt) {
+    moveTowards(tx, ty, dt, game) {
         if (this.actionLockTimer > 0 || this.isAiming || this.moveBlocked) return;
-        let speed = CLASS_CONFIG[this.type].baseSpeed * this.stats.derived.moveSpeedMultiplier * (this.skillActive?.speedMult || 1);
-        const staminaPct = this.stamina / this.maxStamina; if (staminaPct < 0.2) speed *= 0.5;
-        const angle = Math.atan2(ty - this.y, tx - this.x);
-        this.x += Math.cos(angle) * speed * dt;
-        this.y += Math.sin(angle) * speed * dt;
+        let maxSpeed = CLASS_CONFIG[this.type].baseSpeed * this.stats.derived.moveSpeedMultiplier * (this.skillActive?.speedMult || 1);
+        const staminaPct = this.stamina / this.maxStamina; if (staminaPct < 0.2) maxSpeed *= 0.5;
+        const dx = tx - this.x, dy = ty - this.y;
+        const dist = Math.hypot(dx, dy);
+        const dir = dist > 0 ? { x: dx / dist, y: dy / dist } : { x: 0, y: 0 };
+        const arriveRadius = 50;
+        const desiredSpeed = dist < arriveRadius ? maxSpeed * (dist / arriveRadius) : maxSpeed;
+        // Flow field blending (untuk target bangunan/retreat)
+        let flow = { x: 0, y: 0 };
+        if (game && this.target && this.target.constructor.name === 'EconomicBuilding' && this.target.id) {
+            const door = game.getDoorPoint(this.target);
+            flow = game.getFlowVector(this.target.id + ':door', door.x, door.y, this.x, this.y);
+        } else if (game && tx === game.castle.x && ty === game.castle.y) {
+            const door = game.getDoorPoint(game.castle);
+            flow = game.getFlowVector('castle:door', door.x, door.y, this.x, this.y);
+        }
+        const flowWeight = 0.6;
+        const blendDir = Utils.normalize(dir.x + flow.x * flowWeight, dir.y + flow.y * flowWeight);
+        const desired = { x: blendDir.x * desiredSpeed, y: blendDir.y * desiredSpeed };
+        const steer = { x: desired.x - this.vel.x, y: desired.y - this.vel.y };
+        const limited = Utils.limitVec(steer.x, steer.y, maxSpeed);
+        this.acc.x += limited.x; this.acc.y += limited.y;
     }
 
     cooldownRemaining(skill, game) {
@@ -658,7 +667,7 @@ export class Hero {
 
         const dist = Utils.dist(this.x, this.y, this.wanderTarget.x, this.wanderTarget.y);
         if (!isNaN(dist) && dist > 10) {
-            this.moveTowards(this.wanderTarget.x, this.wanderTarget.y, dt);
+            this.moveTowards(this.wanderTarget.x, this.wanderTarget.y, dt, game);
         }
     }
 
@@ -675,7 +684,7 @@ export class Hero {
                     const nx = (this.x - e.x) / dist;
                     const ny = (this.y - e.y) / dist;
                     const overlap = (minGap - dist);
-                    const scale = this.isEngaged ? 0.2 : 0.5;
+                    const scale = this.isEngaged ? 0.0 : 0.5;
                     sepX += nx * overlap * scale;
                     sepY += ny * overlap * scale;
                 }
@@ -712,12 +721,24 @@ export class Hero {
             const maxRange = CLASS_CONFIG[this.type].optimalRange ? CLASS_CONFIG[this.type].optimalRange[1] : 40;
             const d = Utils.dist(this.x, this.y, this.target.x, this.target.y);
             const scale = d >= minRange && d <= maxRange ? 0.1 : 1.0;
-            this.x += sepX * dt * scale;
-            this.y += sepY * dt * scale;
+            this.acc.x += sepX * scale;
+            this.acc.y += sepY * scale;
         } else {
-            this.x += sepX * dt;
-            this.y += sepY * dt;
+            this.acc.x += sepX;
+            this.acc.y += sepY;
         }
+    }
+
+    integrate(dt, game) {
+        const maxSpeed = CLASS_CONFIG[this.type].baseSpeed * this.stats.derived.moveSpeedMultiplier * (this.skillActive?.speedMult || 1);
+        if (this.isEngaged) { this.vel.x = 0; this.vel.y = 0; this.acc.x = 0; this.acc.y = 0; return; }
+        this.vel.x += this.acc.x * dt;
+        this.vel.y += this.acc.y * dt;
+        const limited = Utils.limitVec(this.vel.x, this.vel.y, maxSpeed);
+        this.vel.x = limited.x; this.vel.y = limited.y;
+        this.x += this.vel.x * dt;
+        this.y += this.vel.y * dt;
+        this.acc.x = 0; this.acc.y = 0;
     }
 
     behaviorVictory(dt, game) {
@@ -732,20 +753,16 @@ export class Hero {
     draw(ctx) {
         if (!this.visible) return;
 
-        Utils.drawSprite(ctx, 'hero', this.x, this.y, 20 + (this.level), this.color);
+        let ox = 0, oy = 0;
+        if (this.lungeTimer > 0) { const t = this.lungeTimer / 0.12; ox = this.lungeVec.x * t; oy = this.lungeVec.y * t; }
+        Utils.drawSprite(ctx, 'hero', this.x + ox, this.y + oy, 20 + (this.level), this.color);
         // HP bar
         ctx.fillStyle = 'red'; ctx.fillRect(this.x - 10, this.y - 25, 20, 4);
         ctx.fillStyle = '#2ecc71'; ctx.fillRect(this.x - 10, this.y - 25, 20 * (this.hp / this.maxHp), 4);
         // STAMINA bar (physical classes emphasized)
         ctx.fillStyle = '#444'; ctx.fillRect(this.x - 10, this.y - 20, 20, 3);
         ctx.fillStyle = '#00bfff'; ctx.fillRect(this.x - 10, this.y - 20, 20 * (this.stamina / this.maxStamina), 3);
-        if (this.skillActive) {
-            ctx.strokeStyle = 'rgba(0,255,255,0.6)';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.arc(this.x, this.y, this.radius + 6, 0, Math.PI * 2);
-            ctx.stroke();
-        }
+        if (this.flashTimer > 0) { ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(this.x, this.y, this.radius + 5, 0, Math.PI * 2); ctx.stroke(); }
         ctx.save(); ctx.fillStyle = 'white'; ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center'; ctx.strokeStyle = 'black'; ctx.lineWidth = 2;
         const text = `${this.name} (Lv.${this.level})`;
         ctx.strokeText(text, this.x, this.y - 32); ctx.fillText(text, this.x, this.y - 32);

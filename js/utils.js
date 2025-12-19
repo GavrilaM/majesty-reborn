@@ -10,6 +10,12 @@ export const Utils = {
     mul: (x, y, s) => ({ x: x * s, y: y * s }),
     add: (ax, ay, bx, by) => ({ x: ax + bx, y: ay + by }),
     lerp: (a, b, t) => a + (b - a) * t,
+    limitVec: (x, y, max) => {
+        const len = Math.hypot(x, y);
+        if (len <= max || len === 0) return { x, y };
+        const s = max / len;
+        return { x: x * s, y: y * s };
+    },
 
     drawSprite: (ctx, type, x, y, size, color) => {
         ctx.save();

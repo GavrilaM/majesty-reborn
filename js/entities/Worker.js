@@ -11,6 +11,8 @@ export class Worker {
         this.hp = 70;
         this.maxHp = 70;
         this.speed = 55;
+        this.vel = { x: 0, y: 0 };
+        this.acc = { x: 0, y: 0 };
         this.buildRate = 25;
         this.repairRate = 20;
         this.dodgeChance = 0.03;
@@ -57,6 +59,9 @@ export class Worker {
             const d = Utils.dist(this.x, this.y, door.x, door.y);
             if (d < 18) {
                 this.state = this.target.constructed ? 'REPAIR' : 'BUILD';
+                // Stop movement when starting work
+                this.vel.x = 0; this.vel.y = 0;
+                this.acc.x = 0; this.acc.y = 0;
             } else {
                 this.moveTowards(door.x, door.y, dt);
             }
@@ -113,9 +118,15 @@ export class Worker {
     }
 
     moveTowards(tx, ty, dt) {
-        const angle = Math.atan2(ty - this.y, tx - this.x);
-        this.x += Math.cos(angle) * this.speed * dt;
-        this.y += Math.sin(angle) * this.speed * dt;
+        const dx = tx - this.x, dy = ty - this.y;
+        const dist = Math.hypot(dx, dy);
+        const dir = dist > 0 ? { x: dx / dist, y: dy / dist } : { x: 0, y: 0 };
+        const arriveRadius = 50;
+        const desiredSpeed = dist < arriveRadius ? this.speed * (dist / arriveRadius) : this.speed;
+        const desired = { x: dir.x * desiredSpeed, y: dir.y * desiredSpeed };
+        const steer = { x: desired.x - this.vel.x, y: desired.y - this.vel.y };
+        const limited = Utils.limitVec(steer.x, steer.y, this.speed);
+        this.acc.x += limited.x; this.acc.y += limited.y;
     }
 
     draw(ctx) {
@@ -146,5 +157,21 @@ export class Worker {
         this.hp -= amount;
         if (game) game.entities.push(new Particle(this.x, this.y - 20, '-' + Math.floor(amount), 'orange'));
         if (this.hp <= 0) { this.remove = true; if (game && game.queueNpcRespawn) game.queueNpcRespawn('Worker', 15); }
+    }
+
+    integrate(dt, game) {
+        if (this.state === 'BUILD' || this.state === 'REPAIR') {
+            // Keep anchored at work spot
+            this.vel.x = 0; this.vel.y = 0;
+            this.acc.x = 0; this.acc.y = 0;
+            return;
+        }
+        this.vel.x += this.acc.x * dt;
+        this.vel.y += this.acc.y * dt;
+        const limited = Utils.limitVec(this.vel.x, this.vel.y, this.speed);
+        this.vel.x = limited.x; this.vel.y = limited.y;
+        this.x += this.vel.x * dt;
+        this.y += this.vel.y * dt;
+        this.acc.x = 0; this.acc.y = 0;
     }
 }

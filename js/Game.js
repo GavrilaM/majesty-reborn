@@ -28,6 +28,8 @@ class Game {
         this.ui = new UIManager(this);
         this.builder = new BuildManager(this);
         this.recruitQueue = []; // PACING: Queue for hero training
+        this.flowCell = 64;
+        this.flowCache = new Map(); // key -> { vecX, vecY, cols, rows, ox, oy, cell, ts }
         this.npcRespawns = [];
         this.resize();
         window.addEventListener('resize', () => this.resize());
@@ -95,6 +97,103 @@ class Game {
             // Force UI update to show progress immediately
             this.ui.updateBuildingData();
         }
+    }
+
+    getDoorPoint(building) {
+        return { x: building.x, y: building.y + (building.height / 2) - 5 };
+    }
+
+    getObstacles() {
+        const margin = 12;
+        return this.entities
+            .filter(e => e.constructor.name === 'EconomicBuilding')
+            .map(b => ({
+                x1: b.x - b.width/2 - margin,
+                y1: b.y - b.height/2 - margin,
+                x2: b.x + b.width/2 + margin,
+                y2: b.y + b.height/2 + margin
+            }));
+    }
+
+    computeFlowField(targetX, targetY) {
+        const cell = this.flowCell;
+        const cols = Math.ceil(this.canvas.width / cell);
+        const rows = Math.ceil(this.canvas.height / cell);
+        const ox = 0, oy = 0;
+        const dist = new Array(cols * rows).fill(Infinity);
+        const idx = (cx, cy) => cy * cols + cx;
+        const inBounds = (cx, cy) => cx >= 0 && cy >= 0 && cx < cols && cy < rows;
+        const tx = Math.floor((targetX - ox) / cell);
+        const ty = Math.floor((targetY - oy) / cell);
+        const obstacles = this.getObstacles();
+        const blocked = (cx, cy) => {
+            const x = ox + cx * cell + cell/2;
+            const y = oy + cy * cell + cell/2;
+            for (const o of obstacles) {
+                if (x >= o.x1 && x <= o.x2 && y >= o.y1 && y <= o.y2) return true;
+            }
+            return false;
+        };
+        // Penalty near obstacle shells, with corridor near target door
+        const penalty = (cx, cy) => {
+            const x = ox + cx * cell + cell/2;
+            const y = oy + cy * cell + cell/2;
+            const doorDist = Math.hypot(x - targetX, y - targetY);
+            if (doorDist < 24) return 0;
+            let pen = 0;
+            for (const o of obstacles) {
+                const ex1 = o.x1 - 20, ey1 = o.y1 - 20, ex2 = o.x2 + 20, ey2 = o.y2 + 20;
+                const insideShell = x >= ex1 && x <= ex2 && y >= ey1 && y <= ey2;
+                const insideCore = x >= o.x1 && x <= o.x2 && y >= o.y1 && y <= o.y2;
+                if (insideShell && !insideCore) { pen += 2; break; }
+            }
+            return pen;
+        };
+        const q = [];
+        if (inBounds(tx, ty)) { dist[idx(tx, ty)] = 0; q.push({ cx: tx, cy: ty }); }
+        const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+        while (q.length) {
+            const { cx, cy } = q.shift();
+            const d0 = dist[idx(cx, cy)];
+            for (const [dx, dy] of dirs) {
+                const nx = cx + dx, ny = cy + dy;
+                if (!inBounds(nx, ny)) continue;
+                if (blocked(nx, ny)) continue;
+                const i = idx(nx, ny);
+                const extra = penalty(nx, ny);
+                if (dist[i] > d0 + 1 + extra) { dist[i] = d0 + 1 + extra; q.push({ cx: nx, cy: ny }); }
+            }
+        }
+        const vecX = new Array(cols * rows).fill(0);
+        const vecY = new Array(cols * rows).fill(0);
+        for (let cy = 0; cy < rows; cy++) {
+            for (let cx = 0; cx < cols; cx++) {
+                const i = idx(cx, cy);
+                if (dist[i] === Infinity) { vecX[i] = 0; vecY[i] = 0; continue; }
+                const left = inBounds(cx-1, cy) ? dist[idx(cx-1, cy)] : dist[i];
+                const right = inBounds(cx+1, cy) ? dist[idx(cx+1, cy)] : dist[i];
+                const up = inBounds(cx, cy-1) ? dist[idx(cx, cy-1)] : dist[i];
+                const down = inBounds(cx, cy+1) ? dist[idx(cx, cy+1)] : dist[i];
+                let gx = left - right;
+                let gy = up - down;
+                const norm = Math.hypot(gx, gy) || 1;
+                vecX[i] = gx / norm;
+                vecY[i] = gy / norm;
+            }
+        }
+        return { vecX, vecY, cols, rows, ox, oy, cell, ts: this.gameTime };
+    }
+
+    getFlowVector(key, targetX, targetY, x, y) {
+        let field = this.flowCache.get(key);
+        if (!field || (this.gameTime - field.ts) > 2.0 || field.cols !== Math.ceil(this.canvas.width / this.flowCell) || field.rows !== Math.ceil(this.canvas.height / this.flowCell)) {
+            field = this.computeFlowField(targetX, targetY);
+            this.flowCache.set(key, field);
+        }
+        const cx = Math.max(0, Math.min(field.cols - 1, Math.floor((x - field.ox) / field.cell)));
+        const cy = Math.max(0, Math.min(field.rows - 1, Math.floor((y - field.oy) / field.cell)));
+        const i = cy * field.cols + cx;
+        return { x: field.vecX[i], y: field.vecY[i] };
     }
 
     toggleFlagMode() {
@@ -209,6 +308,7 @@ class Game {
             this.entities.push(new Monster(x, y, type));
         }
         this.entities.forEach(e => e.update(dt, this));
+        this.entities.forEach(e => { if (typeof e.integrate === 'function') e.integrate(dt, this); });
         this.entities = this.entities.filter(e => !e.remove);
         this.ui.update(dt);
     }

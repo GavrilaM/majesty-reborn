@@ -28,9 +28,16 @@ export class Monster {
         this.damageHistory = new Map(); // Track damage sources
         this.attackCooldown = 0;
         this.target = null;
+        this.vel = { x: 0, y: 0 };
+        this.acc = { x: 0, y: 0 };
         this.decisionTimer = 0; // Balancing: Delay between actions
         this.reactionTimer = 0;
         this.isEngaged = false; this.engagedLockTimer = 0;
+        this.attackWindup = 0;
+        this.lungeTimer = 0;
+        this.lungeVec = { x: 0, y: 0 };
+        this.flashTimer = 0;
+        this.targetStickTimer = 0;
 
         // AGGRO SYSTEM
         this.aggroTarget = null; // Hero or Tower who damaged us (for retaliation)
@@ -48,6 +55,9 @@ export class Monster {
 
     update(dt, game) {
         if (this.attackCooldown > 0) this.attackCooldown -= dt;
+        if (this.attackWindup > 0) this.attackWindup -= dt;
+        if (this.lungeTimer > 0) this.lungeTimer -= dt;
+        if (this.flashTimer > 0) this.flashTimer -= dt;
         if (this.reactionTimer > 0) { this.reactionTimer -= dt; if (this.reactionTimer > 0) return; }
 
         // BALANCING: Decision Delay
@@ -97,7 +107,7 @@ export class Monster {
 
         // STEP 2: OPPORTUNITY - If a Hero gets too close (Notice Range), attack them
         // Only check if we're not locked onto a siege target
-        if ((!this.target || (this.target.constructor.name !== 'Hero' && this.target.constructor.name !== 'Worker' && this.target.constructor.name !== 'CastleGuard')) && this.siegeLockTimer <= 0) {
+        if ((!this.target || (this.target.constructor.name !== 'Hero' && this.target.constructor.name !== 'Worker' && this.target.constructor.name !== 'CastleGuard')) && this.siegeLockTimer <= 0 && this.targetStickTimer <= 0) {
             let nearbyUnit = null;
             let closestDist = this.noticeRange;
 
@@ -114,6 +124,7 @@ export class Monster {
                 this.reactionTimer = Utils.rand(0.2, 0.7);
                 this.siegeTarget = null;
                 this.siegeLockTimer = 0;
+                this.targetStickTimer = 2.0;
             }
         }
 
@@ -196,14 +207,35 @@ export class Monster {
 
         if (distToTarget > attackRange) {
             // Move towards target
-            const angle = Math.atan2(this.target.y - this.y, this.target.x - this.x);
-            this.x += Math.cos(angle) * this.speed * dt;
-            this.y += Math.sin(angle) * this.speed * dt;
+            const dx = this.target.x - this.x, dy = this.target.y - this.y;
+            const dist = Math.hypot(dx, dy);
+            const dir = dist > 0 ? { x: dx / dist, y: dy / dist } : { x: 0, y: 0 };
+            const arriveRadius = 50;
+            const desiredSpeed = dist < arriveRadius ? this.speed * (dist / arriveRadius) : this.speed;
+            // Flow blending jika target bangunan
+            let flow = { x: 0, y: 0 };
+            if (this.target && this.target.constructor.name === 'EconomicBuilding' && this.target.id) {
+                const door = game.getDoorPoint(this.target);
+                flow = game.getFlowVector(this.target.id + ':door', door.x, door.y, this.x, this.y);
+            } else if (this.siegeTarget && this.siegeTarget.id) {
+                const door = game.getDoorPoint(this.siegeTarget);
+                flow = game.getFlowVector(this.siegeTarget.id + ':door', door.x, door.y, this.x, this.y);
+            }
+            const blendDir = Utils.normalize(dir.x + flow.x * 0.6, dir.y + flow.y * 0.6);
+            const desired = { x: blendDir.x * desiredSpeed, y: blendDir.y * desiredSpeed };
+            const steer = { x: desired.x - this.vel.x, y: desired.y - this.vel.y };
+            const limited = Utils.limitVec(steer.x, steer.y, this.speed);
+            this.acc.x += limited.x; this.acc.y += limited.y;
             this.isEngaged = false; this.engagedLockTimer = 0;
         }
         else {
             // In attack range
-            if (this.attackCooldown <= 0) {
+            if (this.attackWindup > 0) {
+                // waiting to strike
+            } else if (this.attackCooldown <= 0) {
+                this.attackWindup = 0.5;
+            }
+            if (this.attackCooldown <= 0 && this.attackWindup <= 0) {
                 // Final check before attacking
                 const isHero = this.target.constructor.name === 'Hero';
                 const isWorker = this.target.constructor.name === 'Worker';
@@ -218,13 +250,20 @@ export class Monster {
                     ((isValidUnit && this.target.hp > 0) || isValidBuilding)) {
                     this.target.takeDamage(this.damage, game, this);
                     this.attackCooldown = 1.5;
+                    // Lunge
+                    const ang = Math.atan2(this.target.y - this.y, this.target.x - this.x);
+                    this.lungeVec = { x: Math.cos(ang) * 4, y: Math.sin(ang) * 4 };
+                    this.lungeTimer = 0.12;
                 } else {
                     // Target became invalid during attack, drop it
                     this.target = null;
                 }
             }
             this.isEngaged = true; if (this.engagedLockTimer <= 0) this.engagedLockTimer = 1.0;
+            this.vel.x = 0; this.vel.y = 0;
+            this.acc.x = 0; this.acc.y = 0;
         }
+        if (this.targetStickTimer > 0) this.targetStickTimer -= dt;
     }
     
     canAcceptMeleeAttacker() {
@@ -251,7 +290,7 @@ export class Monster {
                     const nx = (this.x - e.x) / dist;
                     const ny = (this.y - e.y) / dist;
                     const overlap = (minGap - dist);
-                    const scale = this.isEngaged ? 0.2 : 0.5;
+                    const scale = this.isEngaged ? 0.0 : 0.5;
                     sepX += nx * overlap * scale;
                     sepY += ny * overlap * scale;
                 }
@@ -274,8 +313,20 @@ export class Monster {
                 }
             }
         });
-        this.x += sepX * dt;
-        this.y += sepY * dt;
+        this.acc.x += sepX;
+        this.acc.y += sepY;
+    }
+
+    integrate(dt, game) {
+        if (this.isEngaged) { this.vel.x *= 0.2; this.vel.y *= 0.2; this.acc.x = 0; this.acc.y = 0; }
+        const aLimited = Utils.limitVec(this.acc.x, this.acc.y, this.speed * 2);
+        this.vel.x += aLimited.x * dt;
+        this.vel.y += aLimited.y * dt;
+        const limited = Utils.limitVec(this.vel.x, this.vel.y, this.speed);
+        this.vel.x = limited.x; this.vel.y = limited.y;
+        this.x += this.vel.x * dt;
+        this.y += this.vel.y * dt;
+        this.acc.x = 0; this.acc.y = 0;
     }
 
     takeDamage(amount, game, source = null) {
@@ -297,6 +348,7 @@ export class Monster {
         }
 
         this.hp -= amount;
+        this.flashTimer = 0.06;
         if (game) game.entities.push(new Particle(this.x, this.y - 20, "-" + Math.floor(amount), "#ff5555"));
 
         // TRACK DAMAGE
@@ -317,6 +369,7 @@ export class Monster {
                 this.aggroTimer = 5.0; // Chase for 5 seconds
                 // Immediately switch target to the attacker
                 this.target = source;
+                this.targetStickTimer = 0;
             }
         }
 
@@ -385,7 +438,10 @@ export class Monster {
     }
 
     draw(ctx) {
-        Utils.drawSprite(ctx, 'monster', this.x, this.y, this.radius * 2, this.color);
+        let ox = 0, oy = 0;
+        if (this.lungeTimer > 0) { const t = this.lungeTimer / 0.12; ox = this.lungeVec.x * t; oy = this.lungeVec.y * t; }
+        Utils.drawSprite(ctx, 'monster', this.x + ox, this.y + oy, this.radius * 2, this.color);
+        if (this.flashTimer > 0) { ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(this.x, this.y, this.radius + 5, 0, Math.PI * 2); ctx.stroke(); }
         ctx.fillStyle = 'red';
         ctx.fillRect(this.x - 10, this.y - 15, 20, 3);
         ctx.fillStyle = '#00ff00';
