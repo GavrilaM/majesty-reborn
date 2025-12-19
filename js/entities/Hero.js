@@ -606,8 +606,18 @@ export class Hero {
         const dx = tx - this.x, dy = ty - this.y;
         const dist = Math.hypot(dx, dy);
         const dir = dist > 0 ? { x: dx / dist, y: dy / dist } : { x: 0, y: 0 };
-        const arriveRadius = 50;
-        const desiredSpeed = dist < arriveRadius ? maxSpeed * (dist / arriveRadius) : maxSpeed;
+        const arriveRadius = 60;
+        const stopRadius = 5;
+        let desiredSpeed;
+        if (dist < stopRadius) {
+            desiredSpeed = 0;
+            this.vel.x = 0; this.vel.y = 0;
+        } else if (dist < arriveRadius) {
+            const t = (dist - stopRadius) / (arriveRadius - stopRadius);
+            desiredSpeed = maxSpeed * t * t;
+        } else {
+            desiredSpeed = maxSpeed;
+        }
         // Flow field blending (untuk target bangunan/retreat)
         let flow = { x: 0, y: 0 };
         if (game && this.target && this.target.constructor.name === 'EconomicBuilding' && this.target.id) {
@@ -621,7 +631,8 @@ export class Hero {
         const blendDir = Utils.normalize(dir.x + flow.x * flowWeight, dir.y + flow.y * flowWeight);
         const desired = { x: blendDir.x * desiredSpeed, y: blendDir.y * desiredSpeed };
         const steer = { x: desired.x - this.vel.x, y: desired.y - this.vel.y };
-        const limited = Utils.limitVec(steer.x, steer.y, maxSpeed);
+        const steerStrength = maxSpeed * 2;
+        const limited = Utils.limitVec(steer.x, steer.y, steerStrength);
         this.acc.x += limited.x; this.acc.y += limited.y;
     }
 
@@ -679,16 +690,20 @@ export class Hero {
             const isUnit = e.constructor.name === 'Hero' || e.constructor.name === 'Monster' || e.constructor.name === 'Worker' || e.constructor.name === 'CastleGuard';
             if (isUnit) {
                 const dist = Utils.dist(this.x, this.y, e.x, e.y);
-                const minGap = this.radius + e.radius;
+                const minGap = this.radius + (e.radius || 12);
                 if (dist < minGap && dist > 0) {
                     const nx = (this.x - e.x) / dist;
                     const ny = (this.y - e.y) / dist;
-                    const overlap = (minGap - dist);
-                    const scale = this.isEngaged ? 0.0 : 0.5;
+                    const overlap = minGap - dist;
+                    const pushStrength = overlap * 0.5;
+                    if (!this.isEngaged) {
+                        this.x += nx * pushStrength;
+                        this.y += ny * pushStrength;
+                    }
+                    const scale = this.isEngaged ? 0.0 : 0.3;
                     sepX += nx * overlap * scale;
                     sepY += ny * overlap * scale;
                 }
-                // Hard-stop if ally directly ahead and too close
                 const fx = (this.target ? this.target.x : (this.wanderTarget ? this.wanderTarget.x : this.x));
                 const fy = (this.target ? this.target.y : (this.wanderTarget ? this.wanderTarget.y : this.y));
                 const dir = Utils.normalize(fx - this.x, fy - this.y);
@@ -731,14 +746,30 @@ export class Hero {
 
     integrate(dt, game) {
         const maxSpeed = CLASS_CONFIG[this.type].baseSpeed * this.stats.derived.moveSpeedMultiplier * (this.skillActive?.speedMult || 1);
-        if (this.isEngaged) { this.vel.x = 0; this.vel.y = 0; this.acc.x = 0; this.acc.y = 0; return; }
+        // HARD STOP when engaged in combat
+        if (this.isEngaged) {
+            this.vel.x = 0; this.vel.y = 0;
+            this.acc.x = 0; this.acc.y = 0;
+            return;
+        }
+        // Apply acceleration
         this.vel.x += this.acc.x * dt;
         this.vel.y += this.acc.y * dt;
+        // Apply friction/dampening to prevent slippery movement
+        const friction = 0.85;
+        this.vel.x *= friction;
+        this.vel.y *= friction;
+        // Clamp to max speed
         const limited = Utils.limitVec(this.vel.x, this.vel.y, maxSpeed);
-        this.vel.x = limited.x; this.vel.y = limited.y;
+        this.vel.x = limited.x;
+        this.vel.y = limited.y;
+        // Stop completely if velocity is negligible
+        const velMag = Math.hypot(this.vel.x, this.vel.y);
+        if (velMag < 1) { this.vel.x = 0; this.vel.y = 0; }
         this.x += this.vel.x * dt;
         this.y += this.vel.y * dt;
-        this.acc.x = 0; this.acc.y = 0;
+        this.acc.x = 0;
+        this.acc.y = 0;
     }
 
     behaviorVictory(dt, game) {

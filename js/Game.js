@@ -309,8 +309,38 @@ class Game {
         }
         this.entities.forEach(e => e.update(dt, this));
         this.entities.forEach(e => { if (typeof e.integrate === 'function') e.integrate(dt, this); });
+        // Global hard collision resolution pass
+        this.resolveCollisions();
         this.entities = this.entities.filter(e => !e.remove);
         this.ui.update(dt);
+    }
+    
+    resolveCollisions() {
+        const units = this.entities.filter(e =>
+            !e.remove &&
+            (e.constructor.name === 'Hero' ||
+             e.constructor.name === 'Monster' ||
+             e.constructor.name === 'Worker' ||
+             e.constructor.name === 'CastleGuard') &&
+            e.visible !== false
+        );
+        for (let pass = 0; pass < 2; pass++) {
+            for (let i = 0; i < units.length; i++) {
+                for (let j = i + 1; j < units.length; j++) {
+                    const a = units[i], b = units[j];
+                    const dx = b.x - a.x, dy = b.y - a.y;
+                    const dist = Math.hypot(dx, dy);
+                    const minDist = (a.radius || 12) + (b.radius || 12);
+                    if (dist < minDist && dist > 0) {
+                        const overlap = minDist - dist;
+                        const nx = dx / dist, ny = dy / dist;
+                        const pushAmount = overlap * 0.5;
+                        if (!a.isEngaged) { a.x -= nx * pushAmount; a.y -= ny * pushAmount; }
+                        if (!b.isEngaged) { b.x += nx * pushAmount; b.y += ny * pushAmount; }
+                    }
+                }
+            }
+        }
     }
 
     draw() {

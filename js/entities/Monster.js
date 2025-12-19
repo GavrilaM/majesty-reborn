@@ -290,7 +290,12 @@ export class Monster {
                     const nx = (this.x - e.x) / dist;
                     const ny = (this.y - e.y) / dist;
                     const overlap = (minGap - dist);
-                    const scale = this.isEngaged ? 0.0 : 0.5;
+                    const pushStrength = overlap * 0.5;
+                    if (!this.isEngaged) {
+                        this.x += nx * pushStrength;
+                        this.y += ny * pushStrength;
+                    }
+                    const scale = this.isEngaged ? 0.0 : 0.3;
                     sepX += nx * overlap * scale;
                     sepY += ny * overlap * scale;
                 }
@@ -318,12 +323,26 @@ export class Monster {
     }
 
     integrate(dt, game) {
-        if (this.isEngaged) { this.vel.x *= 0.2; this.vel.y *= 0.2; this.acc.x = 0; this.acc.y = 0; }
+        // HARD STOP when engaged in combat
+        if (this.isEngaged) {
+            this.vel.x = 0; this.vel.y = 0;
+            this.acc.x = 0; this.acc.y = 0;
+            return;
+        }
+        // Limit acceleration then apply
         const aLimited = Utils.limitVec(this.acc.x, this.acc.y, this.speed * 2);
         this.vel.x += aLimited.x * dt;
         this.vel.y += aLimited.y * dt;
+        // Apply friction/dampening
+        const friction = 0.85;
+        this.vel.x *= friction;
+        this.vel.y *= friction;
+        // Clamp to max speed
         const limited = Utils.limitVec(this.vel.x, this.vel.y, this.speed);
         this.vel.x = limited.x; this.vel.y = limited.y;
+        // Stop completely if velocity is negligible
+        const velMag = Math.hypot(this.vel.x, this.vel.y);
+        if (velMag < 1) { this.vel.x = 0; this.vel.y = 0; }
         this.x += this.vel.x * dt;
         this.y += this.vel.y * dt;
         this.acc.x = 0; this.acc.y = 0;
