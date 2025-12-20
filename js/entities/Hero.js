@@ -71,6 +71,7 @@ export class Hero {
         this.lungeTimer = 0;
         this.lungeVec = { x: 0, y: 0 };
         this.flashTimer = 0;
+        this.preparedAttack = false; // Fix for attack windup loop
         // Ranger skill disabled per Operation Combat Polish
     }
 
@@ -396,8 +397,9 @@ export class Hero {
         if (dist > maxRange) {
             // Too far: Chase
             this.isEngaged = false; this.engagedLockTimer = 0;
-            this.moveTowards(this.target.x, this.target.y, dt);
-        } else if (dist < minRange) {
+            this.moveTowards(this.target.x, this.target.y, dt, game);
+            this.preparedAttack = false; // Reset attack prep if we move
+        } else if (dist < minRange && false) { // DISABLED KITING for stability
             // Too close: Kite / Reposition (Ranger behavior)
             const kiting = this.behaviorKite(this.target, dt, game);
             if (!kiting) {
@@ -410,16 +412,25 @@ export class Hero {
             this.isEngaged = false; this.engagedLockTimer = 0;
         } else {
             // In optimal range: Attack!
-            if (this.attackWindup > 0) {
-                // waiting to strike
-            } else if (this.attackCooldown <= 0) {
-                // first frame in range: windup before striking
-                this.attackWindup = 0.5;
+            
+            // Fix for Attack Loop:
+            // 1. If cooldown is ready, start windup (if not already started)
+            // 2. Wait for windup
+            // 3. Attack
+            
+            if (this.attackCooldown <= 0) {
+                if (!this.preparedAttack) {
+                    // Start windup
+                    this.attackWindup = 0.2;
+                    this.preparedAttack = true;
+                } else if (this.attackWindup <= 0) {
+                    // Windup finished, execute attack
+                    this.attack(game);
+                    this.attackCooldown = this.stats.derived.attackSpeed;
+                    this.preparedAttack = false;
+                }
             }
-            if (this.attackCooldown <= 0 && this.attackWindup <= 0) {
-                this.attack(game);
-                this.attackCooldown = this.stats.derived.attackSpeed;
-            }
+
             if (!CLASS_CONFIG[this.type].isRanged && this.target.registerEngagement) this.target.registerEngagement(this);
             this.isEngaged = true;
             if (this.engagedLockTimer <= 0) this.engagedLockTimer = 1.2;
@@ -485,6 +496,23 @@ export class Hero {
                 this.state = 'IDLE';
                 this.target = null;
             }
+        }
+    }
+
+    behaviorQuest(dt, game) {
+        if (!this.target || this.target.remove) { this.state = 'IDLE'; this.target = null; return; }
+        const dist = Utils.dist(this.x, this.y, this.target.x, this.target.y);
+        if (dist < 20) {
+            const reward = Math.floor(this.target.reward || 0);
+            this.gold += reward;
+            this.history.goldEarned += reward;
+            game.entities.push(new Particle(this.x, this.y - 30, `+${reward}g`, "gold"));
+            this.target.remove = true;
+            this.victoryTimer = 1.0;
+            this.state = 'VICTORY';
+            this.target = null;
+        } else {
+            this.moveTowards(this.target.x, this.target.y, dt, game);
         }
     }
 
@@ -629,9 +657,12 @@ export class Hero {
         }
         const flowWeight = 0.6;
         const blendDir = Utils.normalize(dir.x + flow.x * flowWeight, dir.y + flow.y * flowWeight);
-        const desired = { x: blendDir.x * desiredSpeed, y: blendDir.y * desiredSpeed };
+        // Prevent desired speed from becoming too tiny outside stop radius
+        const minCruise = (dist > stopRadius) ? maxSpeed * 0.25 : 0;
+        const finalSpeed = Math.max(desiredSpeed, minCruise);
+        const desired = { x: blendDir.x * finalSpeed, y: blendDir.y * finalSpeed };
         const steer = { x: desired.x - this.vel.x, y: desired.y - this.vel.y };
-        const steerStrength = maxSpeed * 2;
+        const steerStrength = maxSpeed * 4;
         const limited = Utils.limitVec(steer.x, steer.y, steerStrength);
         this.acc.x += limited.x; this.acc.y += limited.y;
     }
@@ -756,7 +787,7 @@ export class Hero {
         this.vel.x += this.acc.x * dt;
         this.vel.y += this.acc.y * dt;
         // Apply friction/dampening to prevent slippery movement
-        const friction = 0.85;
+        const friction = 0.98;
         this.vel.x *= friction;
         this.vel.y *= friction;
         // Clamp to max speed
@@ -765,7 +796,7 @@ export class Hero {
         this.vel.y = limited.y;
         // Stop completely if velocity is negligible
         const velMag = Math.hypot(this.vel.x, this.vel.y);
-        if (velMag < 1) { this.vel.x = 0; this.vel.y = 0; }
+        if (velMag < 0.02) { this.vel.x = 0; this.vel.y = 0; }
         this.x += this.vel.x * dt;
         this.y += this.vel.y * dt;
         this.acc.x = 0;

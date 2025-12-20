@@ -12,7 +12,7 @@ export class Projectile {
     }
 
     update(dt, game) {
-        if (this.target.remove) {
+        if (this.target.remove || this.target.hp <= 0) {
             this.remove = true; // Target is already dead
             return;
         }

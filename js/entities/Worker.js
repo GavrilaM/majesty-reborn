@@ -135,7 +135,7 @@ export class Worker {
         }
         const desired = { x: dir.x * desiredSpeed, y: dir.y * desiredSpeed };
         const steer = { x: desired.x - this.vel.x, y: desired.y - this.vel.y };
-        const limited = Utils.limitVec(steer.x, steer.y, this.speed * 2);
+        const limited = Utils.limitVec(steer.x, steer.y, this.speed * 3);
         this.acc.x += limited.x; this.acc.y += limited.y;
     }
 
@@ -179,13 +179,13 @@ export class Worker {
         this.vel.x += this.acc.x * dt;
         this.vel.y += this.acc.y * dt;
         // Apply friction
-        const friction = 0.85;
+        const friction = 0.97;
         this.vel.x *= friction;
         this.vel.y *= friction;
         const limited = Utils.limitVec(this.vel.x, this.vel.y, this.speed);
         this.vel.x = limited.x; this.vel.y = limited.y;
         const velMag = Math.hypot(this.vel.x, this.vel.y);
-        if (velMag < 1) { this.vel.x = 0; this.vel.y = 0; }
+        if (velMag < 0.02) { this.vel.x = 0; this.vel.y = 0; }
         this.x += this.vel.x * dt;
         this.y += this.vel.y * dt;
         this.acc.x = 0; this.acc.y = 0;

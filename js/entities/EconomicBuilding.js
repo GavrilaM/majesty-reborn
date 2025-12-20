@@ -209,7 +209,7 @@ export class EconomicBuilding {
         }
     }
 
-    takeDamage(amount, game, source = null) { this.hp -= amount; }
+    takeDamage(amount, game, source = null) { if (source && source.remove) return; this.hp -= amount; }
 
     draw(ctx) {
         ctx.save();

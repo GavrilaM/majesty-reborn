@@ -54,6 +54,7 @@ export class Monster {
     }
 
     update(dt, game) {
+        if (this.hp <= 0 || this.remove) return;
         if (this.attackCooldown > 0) this.attackCooldown -= dt;
         if (this.attackWindup > 0) this.attackWindup -= dt;
         if (this.lungeTimer > 0) this.lungeTimer -= dt;
@@ -227,38 +228,42 @@ export class Monster {
             const limited = Utils.limitVec(steer.x, steer.y, this.speed);
             this.acc.x += limited.x; this.acc.y += limited.y;
             this.isEngaged = false; this.engagedLockTimer = 0;
+            this.preparedAttack = false; // Reset attack prep if we move
         }
         else {
             // In attack range
-            if (this.attackWindup > 0) {
-                // waiting to strike
-            } else if (this.attackCooldown <= 0) {
-                this.attackWindup = 0.5;
-            }
-            if (this.attackCooldown <= 0 && this.attackWindup <= 0) {
-                // Final check before attacking
-                const isHero = this.target.constructor.name === 'Hero';
-                const isWorker = this.target.constructor.name === 'Worker';
-                const isGuard = this.target.constructor.name === 'CastleGuard';
-                const isValidUnit = (isHero && this.target.visible) || isWorker || isGuard;
-                const isBuilding = this.target.constructor.name === 'EconomicBuilding' ||
-                    this.target.constructor.name === 'Building';
-                const isValidBuilding = isBuilding && this.target.hp > 0;
+            if (this.attackCooldown <= 0) {
+                if (!this.preparedAttack) {
+                    // Start windup
+                    this.attackWindup = 0.2;
+                    this.preparedAttack = true;
+                } else if (this.attackWindup <= 0) {
+                    // Final check before attacking
+                    const isHero = this.target.constructor.name === 'Hero';
+                    const isWorker = this.target.constructor.name === 'Worker';
+                    const isGuard = this.target.constructor.name === 'CastleGuard';
+                    const isValidUnit = (isHero && this.target.visible) || isWorker || isGuard;
+                    const isBuilding = this.target.constructor.name === 'EconomicBuilding' ||
+                        this.target.constructor.name === 'Building';
+                    const isValidBuilding = isBuilding && this.target.hp > 0;
 
-                if (this.target && this.target.takeDamage &&
-                    !this.target.remove &&
-                    ((isValidUnit && this.target.hp > 0) || isValidBuilding)) {
-                    this.target.takeDamage(this.damage, game, this);
-                    this.attackCooldown = 1.5;
-                    // Lunge
-                    const ang = Math.atan2(this.target.y - this.y, this.target.x - this.x);
-                    this.lungeVec = { x: Math.cos(ang) * 4, y: Math.sin(ang) * 4 };
-                    this.lungeTimer = 0.12;
-                } else {
-                    // Target became invalid during attack, drop it
-                    this.target = null;
+                    if (this.target && this.target.takeDamage &&
+                        !this.target.remove &&
+                        ((isValidUnit && this.target.hp > 0) || isValidBuilding)) {
+                        this.target.takeDamage(this.damage, game, this);
+                        this.attackCooldown = 1.5;
+                        // Lunge
+                        const ang = Math.atan2(this.target.y - this.y, this.target.x - this.x);
+                        this.lungeVec = { x: Math.cos(ang) * 4, y: Math.sin(ang) * 4 };
+                        this.lungeTimer = 0.12;
+                    } else {
+                        // Target became invalid during attack, drop it
+                        this.target = null;
+                    }
+                    this.preparedAttack = false;
                 }
             }
+
             this.isEngaged = true; if (this.engagedLockTimer <= 0) this.engagedLockTimer = 1.0;
             this.vel.x = 0; this.vel.y = 0;
             this.acc.x = 0; this.acc.y = 0;
@@ -330,11 +335,11 @@ export class Monster {
             return;
         }
         // Limit acceleration then apply
-        const aLimited = Utils.limitVec(this.acc.x, this.acc.y, this.speed * 2);
+        const aLimited = Utils.limitVec(this.acc.x, this.acc.y, this.speed * 3);
         this.vel.x += aLimited.x * dt;
         this.vel.y += aLimited.y * dt;
         // Apply friction/dampening
-        const friction = 0.85;
+        const friction = 0.97;
         this.vel.x *= friction;
         this.vel.y *= friction;
         // Clamp to max speed
@@ -342,7 +347,7 @@ export class Monster {
         this.vel.x = limited.x; this.vel.y = limited.y;
         // Stop completely if velocity is negligible
         const velMag = Math.hypot(this.vel.x, this.vel.y);
-        if (velMag < 1) { this.vel.x = 0; this.vel.y = 0; }
+        if (velMag < 0.02) { this.vel.x = 0; this.vel.y = 0; }
         this.x += this.vel.x * dt;
         this.y += this.vel.y * dt;
         this.acc.x = 0; this.acc.y = 0;
