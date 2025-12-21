@@ -41,6 +41,8 @@ export class Monster {
         this.moveBlocked = false;
         this.blockedTimer = 0;
         this.blockedSide = 0;
+        this.prevX = x;
+        this.prevY = y;
 
         // AGGRO SYSTEM
         this.aggroTarget = null; // Hero or Tower who damaged us (for retaliation)
@@ -201,7 +203,7 @@ export class Monster {
 
         // Final validation before movement/attack
         if (this.target.remove || this.target.hp <= 0 ||
-            (this.target.constructor.name === 'Hero' && (!this.target.visible || this.target.hp <= 0))) {
+            ((this.target.constructor.name === 'Hero' || this.target.constructor.name === 'Worker' || this.target.constructor.name === 'CastleGuard') && (!this.target.visible || this.target.hp <= 0))) {
             this.target = null;
             return;
         }
@@ -246,7 +248,11 @@ export class Monster {
                 const door = game.getDoorPoint(this.siegeTarget);
                 flow = game.getFlowVector(this.siegeTarget.id + ':door', door.x, door.y, this.x, this.y);
             }
-            let blendDir = Utils.normalize(dir.x + flow.x * 0.6, dir.y + flow.y * 0.6);
+            let flowWeight = 0.6;
+            if ((this.target && this.target.constructor.name === 'EconomicBuilding') && dist < 100) {
+                flowWeight = 0.0;
+            }
+            let blendDir = Utils.normalize(dir.x + flow.x * flowWeight, dir.y + flow.y * flowWeight);
             if (this.moveBlocked) {
                 if (this.blockedTimer <= 0) { this.blockedTimer = 0.35; this.blockedSide = Math.random() < 0.5 ? -1 : 1; }
                 const perp = Utils.perp(blendDir.x, blendDir.y);
@@ -317,6 +323,15 @@ export class Monster {
     }
 
     maintainSpace(entities, dt) {
+        // Override: jika sangat dekat pintu target gedung, matikan repulsi untuk memastikan mendekat
+        if (this.target && this.target.constructor.name === 'EconomicBuilding') {
+            const doorX = this.target.x;
+            const doorY = this.target.y + (this.target.height / 2) - 5;
+            const dd = Utils.dist(this.x, this.y, doorX, doorY);
+            if (dd < 30) {
+                return;
+            }
+        }
         let sepX = 0, sepY = 0;
         entities.forEach(e => {
             if (e === this || e.remove) return;
@@ -342,6 +357,7 @@ export class Monster {
                 if (aheadDot > 0.6 && dist < minGap * 0.8) this.moveBlocked = true;
             }
             if (e.constructor.name === 'EconomicBuilding') {
+                if (this.target === e) return;
                 const tx = this.target ? this.target.x : this.x;
                 const ty = this.target ? this.target.y : this.y;
                 const dir = Utils.normalize(tx - this.x, ty - this.y);
@@ -371,8 +387,8 @@ export class Monster {
 
     integrate(dt, game) {
         if (isNaN(this.x) || isNaN(this.y)) {
-            this.x = game && game.castle ? game.castle.x : 0;
-            this.y = game && game.castle ? game.castle.y - 100 : 0;
+            this.x = this.prevX || 0;
+            this.y = this.prevY || 0;
             this.vel.x = 0; this.vel.y = 0;
             this.acc.x = 0; this.acc.y = 0;
             return;
@@ -400,6 +416,10 @@ export class Monster {
         if (velMag < 0.02) { this.vel.x = 0; this.vel.y = 0; }
         this.x += this.vel.x * dt;
         this.y += this.vel.y * dt;
+        if (Number.isFinite(this.x) && Number.isFinite(this.y)) {
+            this.prevX = this.x;
+            this.prevY = this.y;
+        }
         this.acc.x = 0; this.acc.y = 0;
     }
 

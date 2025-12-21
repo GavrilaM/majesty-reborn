@@ -75,6 +75,9 @@ export class Hero {
         this.flashTimer = 0;
         this.preparedAttack = false; // Fix for attack windup loop
         // Ranger skill disabled per Operation Combat Polish
+        this.stuckTimer = 0;
+        this.lastMoveX = x;
+        this.lastMoveY = y;
     }
 
     update(dt, game) {
@@ -186,13 +189,13 @@ export class Hero {
     getExplorePoint(game) {
         const cx = game.castle.x, cy = game.castle.y;
         const w = game.canvas.width, h = game.canvas.height;
-        let px = 0, py = 0;
-        let tries = 0;
-        do {
-            px = Math.random() * w;
-            py = Math.random() * h;
-            tries++;
-        } while (Utils.dist(px, py, cx, cy) < 300 && tries < 20);
+        const maxR = Math.hypot(w, h) * 0.5;
+        const angle = Math.random() * Math.PI * 2;
+        const radius = Utils.clamp(maxR * (0.6 + Math.random() * 0.35), 0, maxR);
+        let px = cx + Math.cos(angle) * radius;
+        let py = cy + Math.sin(angle) * radius;
+        px = Math.max(0, Math.min(w, px));
+        py = Math.max(0, Math.min(h, py));
         return { x: px, y: py };
     }
 
@@ -202,7 +205,14 @@ export class Hero {
         if (d < 15) { this.state = 'DECISION'; this.exploreTarget = null; return; }
         this.exploreTimer = (this.exploreTimer || 0) - dt;
         if (this.exploreTimer <= 0) { this.state = 'DECISION'; this.exploreTarget = null; return; }
+        const beforeX = this.x, beforeY = this.y;
         this.moveTowards(this.exploreTarget.x, this.exploreTarget.y, dt, game);
+        const moved = Utils.dist(beforeX, beforeY, this.x, this.y);
+        if (moved < 1) { this.stuckTimer += dt; } else { this.stuckTimer = 0; }
+        if (this.stuckTimer > 1.2 && d > 25) {
+            this.exploreTarget = this.getExplorePoint(game);
+            this.stuckTimer = 0;
+        }
     }
 
     setupPatrolRoute(game) {
@@ -230,7 +240,15 @@ export class Hero {
             this.patrolIdx++;
             if (this.patrolIdx >= this.patrolRoute.length) { this.state = 'DECISION'; return; }
         } else {
+            const beforeX = this.x, beforeY = this.y;
             this.moveTowards(tgt.x, tgt.y, dt, game);
+            const moved = Utils.dist(beforeX, beforeY, this.x, this.y);
+            if (moved < 1) { this.stuckTimer += dt; } else { this.stuckTimer = 0; }
+            if (this.stuckTimer > 1.2 && d > 25) {
+                // Skip ke waypoint berikutnya atau rekalkulasi rute
+                this.patrolIdx = Math.min(this.patrolIdx + 1, this.patrolRoute.length - 1);
+                this.stuckTimer = 0;
+            }
         }
         this.patrolTimer = (this.patrolTimer || 0) - dt;
         if (this.patrolTimer <= 0) { this.state = 'DECISION'; }
@@ -811,6 +829,15 @@ export class Hero {
     }
 
     maintainSpace(entities, dt) {
+        // Override: jika sedang di depan pintu target, matikan repulsi agar masuk 100%
+        if ((this.state === 'SHOP' || this.state === 'RETREAT') && this.target && this.target.constructor.name === 'EconomicBuilding') {
+            const doorX = this.target.x;
+            const doorY = this.target.y + (this.target.height / 2) - 5;
+            const dd = Utils.dist(this.x, this.y, doorX, doorY);
+            if (dd < 30) {
+                return;
+            }
+        }
         this.moveBlocked = false;
         let sepX = 0, sepY = 0;
         entities.forEach(e => {
@@ -825,7 +852,8 @@ export class Hero {
                     const ny = (this.y - e.y) / dist;
                     const overlap = minGap - dist;
                     const pushStrength = overlap * 0.5;
-                    const scale = this.isEngaged ? 0.0 : 0.3;
+                    const travelState = this.state === 'SHOP' || this.state === 'RETREAT' || this.state === 'PATROL' || this.state === 'EXPLORE';
+                    const scale = this.isEngaged ? 0.0 : (travelState ? 0.15 : 0.3);
                     sepX += nx * overlap * scale;
                     sepY += ny * overlap * scale;
                 }
@@ -835,9 +863,8 @@ export class Hero {
                 const ax = e.x - this.x, ay = e.y - this.y;
                 const aheadDot = Utils.dot(dir.x, dir.y, (ax / ((dist||1))), (ay / ((dist||1))));
                 
-                // Fix: Don't self-block if we are in critical movement states (SHOP/RETREAT)
-                const criticalState = this.state === 'SHOP' || this.state === 'RETREAT';
-                if (!criticalState && aheadDot > 0.6 && dist < minGap * 0.8) this.moveBlocked = true;
+                const travelState = this.state === 'SHOP' || this.state === 'RETREAT' || this.state === 'PATROL' || this.state === 'EXPLORE';
+                if (!travelState && aheadDot > 0.6 && dist < minGap * 0.8) this.moveBlocked = true;
             }
 
             if (e.constructor.name === 'EconomicBuilding') {
@@ -848,13 +875,23 @@ export class Hero {
                 const bx = e.x - this.x;
                 const by = e.y - this.y;
                 const bd = Math.hypot(bx, by);
+                // Jika kita mendekati pintu target, jangan tolak gedung lain terlalu agresif
+                let nearDoor = false;
+                if (this.target && this.target.constructor.name === 'EconomicBuilding') {
+                    const doorX = this.target.x;
+                    const doorY = this.target.y + (this.target.height / 2) - 5;
+                    const dd = Utils.dist(this.x, this.y, doorX, doorY);
+                    nearDoor = dd < 50;
+                }
+                if (nearDoor) return;
                 if (bd < Math.max(e.width, e.height)) {
                     const bdir = Utils.normalize(bx, by);
                     const facing = Utils.dot(dir.x, dir.y, bdir.x, bdir.y);
                     if (facing > 0.8) {
                         const perp = Utils.perp(dir.x, dir.y);
-                        this.acc.x += perp.x * 100 * dt;
-                        this.acc.y += perp.y * 100 * dt;
+                        const push = (this.state === 'SHOP' || this.state === 'RETREAT') ? 60 : 100;
+                        this.acc.x += perp.x * push * dt;
+                        this.acc.y += perp.y * push * dt;
                     }
                 }
             }
