@@ -366,10 +366,11 @@ export class Monster {
     }
 
     integrate(dt, game) {
-        // Safety check for NaN coordinates (Ghost Monster Fix)
         if (isNaN(this.x) || isNaN(this.y)) {
-            this.hp = 0; 
-            this.remove = true;
+            this.x = game && game.castle ? game.castle.x : 0;
+            this.y = game && game.castle ? game.castle.y - 100 : 0;
+            this.vel.x = 0; this.vel.y = 0;
+            this.acc.x = 0; this.acc.y = 0;
             return;
         }
 

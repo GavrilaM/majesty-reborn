@@ -89,23 +89,8 @@ export class Hero {
         if (this.hp <= 0) { this.remove = true; return; }
 
         if (!this.visible) {
-            // Fix: Ensure we are actually inside a building (visitor list)
-            // If not found in any building, force visible + idle
-            if (this.state === 'SHOP' || this.state === 'RETREAT') {
-                const inside = game.entities.some(e => 
-                    e.constructor.name === 'EconomicBuilding' && e.visitors.includes(this)
-                );
-                if (!inside) {
-                    this.visible = true;
-                    this.state = 'IDLE';
-                }
-            }
-            
-            if (this.state === 'SHOP') {
-                this.behaviorShop(dt, game);
-            } else {
-                this.behaviorResting(dt, game);
-            }
+            if (this.state === 'SHOP') { this.behaviorShop(dt, game); return; }
+            if (this.state === 'RETREAT') { this.behaviorResting(dt, game); return; }
             return;
         }
 

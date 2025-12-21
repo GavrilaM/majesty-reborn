@@ -28,6 +28,32 @@ export class UIManager {
         if (btnItems) btnItems.onclick = () => this.switchTab('items'); // New
         if (btnMind) btnMind.onclick = () => this.switchTab('mind');
         if (btnClose) btnClose.onclick = () => this.deselect();
+        const rqPanel = document.getElementById('bld-recruit');
+        if (rqPanel) {
+            rqPanel.addEventListener('click', (e) => {
+                const warriorBtn = e.target.closest('#bld-btn-warrior');
+                const rangerBtn = e.target.closest('#bld-btn-ranger');
+                if (!warriorBtn && !rangerBtn) return;
+                const b = this.selectedEntity;
+                if (!b || b.constructor.name !== 'EconomicBuilding' || b.type !== 'GUILD') return;
+                if (warriorBtn) this.game.recruit('WARRIOR', b);
+                else if (rangerBtn) this.game.recruit('RANGER', b);
+            });
+        }
+        const vList = document.getElementById('bld-visitor-list');
+        if (vList) {
+            vList.addEventListener('click', (e) => {
+                const row = e.target.closest('.visitor-row');
+                if (!row) return;
+                const idx = Array.prototype.indexOf.call(vList.children, row);
+                const currB = this.selectedEntity;
+                if (!currB || currB.constructor.name !== 'EconomicBuilding') return;
+                if (currB.visitors && currB.visitors[idx]) {
+                    e.stopPropagation();
+                    this.select(currB.visitors[idx]);
+                }
+            });
+        }
     }
 
     // ... (Keep update, select, deselect, switchTab, renderButtons, updateHeroData) ...
@@ -98,10 +124,6 @@ export class UIManager {
                 vList.dataset.buildingId = entity.id || entity.name || 'building';
                 vList.replaceChildren();
             }
-            const btnWarrior = document.getElementById('bld-btn-warrior');
-            const btnRanger = document.getElementById('bld-btn-ranger');
-            if (btnWarrior) btnWarrior.onclick = entity.type === 'GUILD' ? (() => this.game.recruit('WARRIOR', entity)) : null;
-            if (btnRanger) btnRanger.onclick = entity.type === 'GUILD' ? (() => this.game.recruit('RANGER', entity)) : null;
             this.updateBuildingData();
         }
         else if (entity.constructor.name === 'Worker' || entity.constructor.name === 'CastleGuard') {
@@ -348,36 +370,8 @@ export class UIManager {
         if (!vList && document.getElementById('bld-visitors-container')) return;
 
         if (vList) {
-            if (!this._visitorSnapshots) this._visitorSnapshots = new Map();
             const key = b.id || b.name || 'building';
-            const snapshot = (b.visitors || []).map(h => h.name).join('|');
-            const prev = this._visitorSnapshots.get(key) || '';
-            const listBid = vList.dataset.buildingId || '';
-            if (listBid !== key) {
-                vList.dataset.buildingId = key;
-            }
-            if (prev === snapshot && vList.dataset.delegated === '1' && listBid === key) {
-                const rows = vList.querySelectorAll('.visitor-row');
-                rows.forEach((row, idx) => {
-                    const hpSpan = row.querySelector('.v-hp') || row.querySelector('span:last-child');
-                    if (hpSpan && b.visitors[idx]) hpSpan.innerText = `(${Math.floor(b.visitors[idx].hp)}hp)`;
-                });
-                return;
-            }
-            this._visitorSnapshots.set(key, snapshot);
-            if (!vList.dataset.delegated) {
-                vList.addEventListener('click', (e) => {
-                    const row = e.target.closest('.visitor-row');
-                    if (!row) return;
-                    const idx = Array.prototype.indexOf.call(vList.children, row);
-                    const currB = this.selectedEntity;
-                    if (currB && currB.visitors && currB.visitors[idx]) {
-                        e.stopPropagation();
-                        this.select(currB.visitors[idx]);
-                    }
-                });
-                vList.dataset.delegated = '1';
-            }
+            vList.dataset.buildingId = key;
             if (b.visitors && b.visitors.length > 0) {
                 const frag = document.createDocumentFragment();
                 b.visitors.forEach(hero => {
@@ -401,25 +395,37 @@ export class UIManager {
         // Recruitment Panel
         const rqText = document.getElementById('bld-recruit-text');
         const rqBar = document.getElementById('bld-recruit-bar');
+        const isGuild = b.type === 'GUILD';
         const btnWarrior = document.getElementById('bld-btn-warrior');
         const btnRanger = document.getElementById('bld-btn-ranger');
-        const isGuild = b.type === 'GUILD';
-        if (btnWarrior) btnWarrior.disabled = !isGuild || this.game.gold < 200;
-        if (btnRanger) btnRanger.disabled = !isGuild || this.game.gold < 350;
-        if (btnWarrior) btnWarrior.style.opacity = btnWarrior.disabled ? '0.6' : '1';
-        if (btnRanger) btnRanger.style.opacity = btnRanger.disabled ? '0.6' : '1';
+        if (btnWarrior) {
+            btnWarrior.disabled = !isGuild || this.game.gold < 200;
+            btnWarrior.style.opacity = btnWarrior.disabled ? '0.6' : '1';
+        }
+        if (btnRanger) {
+            btnRanger.disabled = !isGuild || this.game.gold < 350;
+            btnRanger.style.opacity = btnRanger.disabled ? '0.6' : '1';
+        }
 
         if (isGuild) {
-            const queue = this.game.recruitQueue.filter(item => item.source === b);
-            if (queue.length > 0) {
-                const next = queue[0];
-                const total = next.type === 'RANGER' ? 3.0 : 2.0;
-                const pct = Math.max(0, Math.min(1, 1 - (next.timer / total)));
+            const current = this.game.recruitQueue[0];
+            const isCurrentHere = current && current.source && ((current.source === b) || (current.source.id && current.source.id === b.id));
+            if (isCurrentHere) {
+                const total = current.type === 'RANGER' ? 3.0 : 2.0;
+                const pct = Math.max(0, Math.min(1, 1 - (current.timer / total)));
                 if (rqBar) rqBar.style.width = (pct * 100) + '%';
-                if (rqText) rqText.innerText = `Training ${next.type} — ${next.timer.toFixed(1)}s`;
+                if (rqText) rqText.innerText = `Training ${current.type} — ${Math.max(0, current.timer).toFixed(1)}s`;
             } else {
-                if (rqBar) rqBar.style.width = '0%';
-                if (rqText) rqText.innerText = 'Idle';
+                const positions = this.game.recruitQueue
+                    .map((item, i) => (item.source && ((item.source === b) || (item.source.id && item.source.id === b.id))) ? (i + 1) : 0)
+                    .filter(p => p > 0);
+                if (positions.length > 0) {
+                    if (rqBar) rqBar.style.width = '0%';
+                    if (rqText) rqText.innerText = `Queued (#${positions[0]})`;
+                } else {
+                    if (rqBar) rqBar.style.width = '0%';
+                    if (rqText) rqText.innerText = 'Idle';
+                }
             }
         } else {
             if (rqBar) rqBar.style.width = '0%';
