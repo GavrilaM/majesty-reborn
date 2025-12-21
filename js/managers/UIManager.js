@@ -93,6 +93,16 @@ export class UIManager {
             // Recruitment panel only for GUILD
             const rqPanel = document.getElementById('bld-recruit');
             if (rqPanel) rqPanel.style.display = entity.type === 'GUILD' ? 'block' : 'none';
+            const vList = document.getElementById('bld-visitor-list');
+            if (vList) {
+                vList.dataset.buildingId = entity.id || entity.name || 'building';
+                vList.replaceChildren();
+            }
+            const btnWarrior = document.getElementById('bld-btn-warrior');
+            const btnRanger = document.getElementById('bld-btn-ranger');
+            if (btnWarrior) btnWarrior.onclick = entity.type === 'GUILD' ? (() => this.game.recruit('WARRIOR', entity)) : null;
+            if (btnRanger) btnRanger.onclick = entity.type === 'GUILD' ? (() => this.game.recruit('RANGER', entity)) : null;
+            this.updateBuildingData();
         }
         else if (entity.constructor.name === 'Worker' || entity.constructor.name === 'CastleGuard') {
             if (this.viewMonster) this.viewMonster.classList.remove('hidden');
@@ -335,34 +345,56 @@ export class UIManager {
 
         // VISITOR LIST
         const vList = document.getElementById('bld-visitor-list');
-        // !!! FIX: Remove innerHTML wipe to allow events, but since we rebuild every frame for updates, 
-        // we need a cleaner way. For now, simple rebuild is fine for prototype.
-
-        // We only rebuild if the count changed or just strictly rebuild (easier)
-        // To make clicks work reliably, ensure the element exists.
-        // Check if element exists in index.html
-        if (!vList && document.getElementById('bld-visitors-container')) {
-            // Create it if missing? No, rely on HTML.
-            return;
-        }
+        if (!vList && document.getElementById('bld-visitors-container')) return;
 
         if (vList) {
-            vList.innerHTML = '';
+            if (!this._visitorSnapshots) this._visitorSnapshots = new Map();
+            const key = b.id || b.name || 'building';
+            const snapshot = (b.visitors || []).map(h => h.name).join('|');
+            const prev = this._visitorSnapshots.get(key) || '';
+            const listBid = vList.dataset.buildingId || '';
+            if (listBid !== key) {
+                vList.dataset.buildingId = key;
+            }
+            if (prev === snapshot && vList.dataset.delegated === '1' && listBid === key) {
+                const rows = vList.querySelectorAll('.visitor-row');
+                rows.forEach((row, idx) => {
+                    const hpSpan = row.querySelector('.v-hp') || row.querySelector('span:last-child');
+                    if (hpSpan && b.visitors[idx]) hpSpan.innerText = `(${Math.floor(b.visitors[idx].hp)}hp)`;
+                });
+                return;
+            }
+            this._visitorSnapshots.set(key, snapshot);
+            if (!vList.dataset.delegated) {
+                vList.addEventListener('click', (e) => {
+                    const row = e.target.closest('.visitor-row');
+                    if (!row) return;
+                    const idx = Array.prototype.indexOf.call(vList.children, row);
+                    const currB = this.selectedEntity;
+                    if (currB && currB.visitors && currB.visitors[idx]) {
+                        e.stopPropagation();
+                        this.select(currB.visitors[idx]);
+                    }
+                });
+                vList.dataset.delegated = '1';
+            }
             if (b.visitors && b.visitors.length > 0) {
+                const frag = document.createDocumentFragment();
                 b.visitors.forEach(hero => {
                     const row = document.createElement('div');
                     row.className = 'visitor-row';
-                    row.innerHTML = `<span>${hero.name}</span> <span style="font-size:9px; color:#888;">(${Math.floor(hero.hp)}hp)</span>`;
-
-                    // CLICK HANDLER
-                    row.onclick = (e) => {
-                        e.stopPropagation(); // Don't click through to something else
-                        this.select(hero); // Select the visitor
-                    };
-                    vList.appendChild(row);
+                    row.innerHTML = `<span>${hero.name}</span> <span class="v-hp" style="font-size:9px; color:#888;">(${Math.floor(hero.hp)}hp)</span>`;
+                    frag.appendChild(row);
                 });
+                vList.replaceChildren(frag);
             } else {
-                vList.innerHTML = `<div style="padding:5px; color:#555; font-style:italic;">No visitors.</div>`;
+                vList.replaceChildren();
+                const empty = document.createElement('div');
+                empty.style.padding = '5px';
+                empty.style.color = '#555';
+                empty.style.fontStyle = 'italic';
+                empty.textContent = 'No visitors.';
+                vList.appendChild(empty);
             }
         }
 
@@ -372,8 +404,10 @@ export class UIManager {
         const btnWarrior = document.getElementById('bld-btn-warrior');
         const btnRanger = document.getElementById('bld-btn-ranger');
         const isGuild = b.type === 'GUILD';
-        if (btnWarrior) btnWarrior.onclick = isGuild ? (() => this.game.recruit('WARRIOR', b)) : null;
-        if (btnRanger) btnRanger.onclick = isGuild ? (() => this.game.recruit('RANGER', b)) : null;
+        if (btnWarrior) btnWarrior.disabled = !isGuild || this.game.gold < 200;
+        if (btnRanger) btnRanger.disabled = !isGuild || this.game.gold < 350;
+        if (btnWarrior) btnWarrior.style.opacity = btnWarrior.disabled ? '0.6' : '1';
+        if (btnRanger) btnRanger.style.opacity = btnRanger.disabled ? '0.6' : '1';
 
         if (isGuild) {
             const queue = this.game.recruitQueue.filter(item => item.source === b);

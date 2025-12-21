@@ -214,6 +214,7 @@ export class Hero {
     }
 
     behaviorIdle(dt, game) {
+        if (this.nextState) return;
         const range = this.stats.derived.perceptionRange;
         const nearbyMonsters = game.entities.filter(e => e.constructor.name === 'Monster' && Utils.dist(this.x, this.y, e.x, e.y) < range);
         const dangerNearby = nearbyMonsters.some(m => Utils.dist(this.x, this.y, m.x, m.y) < 120);
@@ -671,7 +672,10 @@ export class Hero {
             const door = game.getDoorPoint(game.castle);
             flow = game.getFlowVector('castle:door', door.x, door.y, this.x, this.y);
         }
-        const flowWeight = 0.6;
+        let flowWeight = 0.6;
+        if (dist < 100 && ((this.target && this.target.constructor.name === 'EconomicBuilding') || (game && tx === game.castle.x && ty === game.castle.y))) {
+            flowWeight = 0.0;
+        }
         let blendDir = Utils.normalize(dir.x + flow.x * flowWeight, dir.y + flow.y * flowWeight);
         if (this.moveBlocked) {
             if (this.blockedTimer <= 0) { this.blockedTimer = 0.35; this.blockedSide = Math.random() < 0.5 ? -1 : 1; }
@@ -769,6 +773,7 @@ export class Hero {
             }
 
             if (e.constructor.name === 'EconomicBuilding') {
+                if (this.target === e) return;
                 const fx = (this.target ? this.target.x : (this.wanderTarget ? this.wanderTarget.x : this.x));
                 const fy = (this.target ? this.target.y : (this.wanderTarget ? this.wanderTarget.y : this.y));
                 const dir = Utils.normalize(fx - this.x, fy - this.y);

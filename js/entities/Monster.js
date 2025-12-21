@@ -344,13 +344,19 @@ export class Monster {
                 const bx = e.x - this.x;
                 const by = e.y - this.y;
                 const bd = Math.hypot(bx, by);
-                if (bd < Math.max(e.width, e.height)) {
+                const bw = Number.isFinite(e.width) ? e.width : 0;
+                const bh = Number.isFinite(e.height) ? e.height : 0;
+                if (bd < Math.max(bw, bh)) {
                     const bdir = Utils.normalize(bx, by);
                     const facing = Utils.dot(dir.x, dir.y, bdir.x, bdir.y);
                     if (facing > 0.8) {
                         const perp = Utils.perp(dir.x, dir.y);
-                        this.x += perp.x * 12 * dt;
-                        this.y += perp.y * 12 * dt;
+                        const stepX = perp.x * 12 * dt;
+                        const stepY = perp.y * 12 * dt;
+                        if (Number.isFinite(stepX) && Number.isFinite(stepY)) {
+                            this.x += stepX;
+                            this.y += stepY;
+                        }
                     }
                 }
             }
