@@ -1,6 +1,7 @@
 // ... (Keep imports and constructor exactly as before) ...
 import { Utils } from '../utils.js';
 import { BUILDING_CONFIG } from '../config/BuildingConfig.js';
+import { EconomicBuilding } from '../entities/EconomicBuilding.js';
 
 export class UIManager {
     constructor(game) {
@@ -35,7 +36,7 @@ export class UIManager {
                 const rangerBtn = e.target.closest('#bld-btn-ranger');
                 if (!warriorBtn && !rangerBtn) return;
                 const b = this.selectedEntity;
-                if (!b || b.constructor.name !== 'EconomicBuilding' || b.type !== 'GUILD') return;
+                if (!b || !(b instanceof EconomicBuilding) || b.type !== 'GUILD') return;
                 if (warriorBtn) this.game.recruit('WARRIOR', b);
                 else if (rangerBtn) this.game.recruit('RANGER', b);
             });
@@ -67,7 +68,7 @@ export class UIManager {
                 this.deselect();
             } else {
                 if (this.selectedEntity.constructor.name === 'Hero') this.updateHeroData();
-                if (this.selectedEntity.constructor.name === 'EconomicBuilding') this.updateBuildingData();
+                if (this.selectedEntity instanceof EconomicBuilding || this.selectedEntity.constructor.name === 'EconomicBuilding') this.updateBuildingData();
                 if (this.selectedEntity.constructor.name === 'Monster') this.updateMonsterData();
             }
         }
@@ -102,7 +103,7 @@ export class UIManager {
             this.renderButtons('MONSTER');
             this.updateMonsterData();
         }
-        else if (entity.constructor.name === 'EconomicBuilding') {
+        else if (entity instanceof EconomicBuilding || entity.constructor.name === 'EconomicBuilding') {
             if (this.viewBuilding) this.viewBuilding.classList.remove('hidden');
 
             document.getElementById('bld-name').innerText = entity.name || "Building";
@@ -171,7 +172,8 @@ export class UIManager {
 
         if (context === 'DEFAULT' || context === 'MARKET' || context === 'BUILDING') {
             addBtn('🚩', 'Bounty', '100g', () => this.game.toggleFlagMode());
-            addBtn('🏛️', 'Guild', '300g', () => this.game.builder.startBuild('GUILD'));
+            addBtn('🏛️', 'Warrior Guild', '300g', () => this.game.builder.startBuild('WARRIOR_GUILD'));
+            addBtn('🏹', 'Ranger Guild', '300g', () => this.game.builder.startBuild('RANGER_GUILD'));
             addBtn('⚖️', 'Market', '200g', () => this.game.builder.startBuild('MARKET'));
             addBtn('🗼', 'Tower', '150g', () => this.game.builder.startBuild('TOWER'));
         }
@@ -307,6 +309,8 @@ export class UIManager {
 
         const nameEl = document.getElementById('mon-name');
         if (nameEl) nameEl.innerText = m.archetype || "Monster";
+        const typeEl = document.getElementById('mon-type');
+        if (typeEl) typeEl.innerText = 'Enemy';
 
         const hpText = document.getElementById('mon-hp-text');
         if (hpText) hpText.innerText = `${Math.floor(m.hp)}/${Math.floor(m.maxHp)}`;
@@ -398,13 +402,17 @@ export class UIManager {
         const isGuild = b.type === 'GUILD';
         const btnWarrior = document.getElementById('bld-btn-warrior');
         const btnRanger = document.getElementById('bld-btn-ranger');
+        const allowW = isGuild && (!b.allowedRecruits || b.allowedRecruits.includes('WARRIOR'));
+        const allowR = isGuild && (!b.allowedRecruits || b.allowedRecruits.includes('RANGER'));
         if (btnWarrior) {
-            btnWarrior.disabled = !isGuild || this.game.gold < 200;
+            btnWarrior.disabled = !isGuild || !allowW || this.game.gold < 200;
             btnWarrior.style.opacity = btnWarrior.disabled ? '0.6' : '1';
+            btnWarrior.style.display = isGuild ? 'inline-block' : 'none';
         }
         if (btnRanger) {
-            btnRanger.disabled = !isGuild || this.game.gold < 350;
+            btnRanger.disabled = !isGuild || !allowR || this.game.gold < 350;
             btnRanger.style.opacity = btnRanger.disabled ? '0.6' : '1';
+            btnRanger.style.display = isGuild ? 'inline-block' : 'none';
         }
 
         if (isGuild) {
@@ -447,7 +455,7 @@ export class UIManager {
             const my = e.y * scaleY;
             if (e.constructor.name === 'Hero') { ctx.fillStyle = e.color; ctx.fillRect(mx - 1, my - 1, 3, 3); }
             else if (e.constructor.name === 'Monster') { ctx.fillStyle = 'red'; ctx.fillRect(mx - 1, my - 1, 2, 2); }
-            else if (e.constructor.name === 'EconomicBuilding') {
+            else if (e instanceof EconomicBuilding || e.constructor.name === 'EconomicBuilding') {
                 ctx.fillStyle = e.color || '#888'; ctx.fillRect(mx - 2, my - 2, 5, 5);
                 if (e === this.selectedEntity) { ctx.strokeStyle = 'white'; ctx.strokeRect(mx - 3, my - 3, 7, 7); }
             }

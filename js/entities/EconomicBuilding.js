@@ -41,7 +41,7 @@ export class EconomicBuilding {
                 this.remove = true;
                 this.visitors.forEach(hero => {
                     hero.visible = true;
-                    hero.state = 'IDLE';
+                    hero.state = 'DECISION';
                 });
                 return;
             } else {

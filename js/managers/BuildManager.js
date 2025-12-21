@@ -1,5 +1,7 @@
 import { BUILDING_CONFIG } from '../config/BuildingConfig.js';
 import { EconomicBuilding } from '../entities/EconomicBuilding.js';
+import { WarriorGuild } from '../entities/guild/WarriorGuild.js';
+import { RangerGuild } from '../entities/guild/RangerGuild.js';
 import { Utils } from '../utils.js';
 
 export class BuildManager {
@@ -10,7 +12,8 @@ export class BuildManager {
     }
 
     startBuild(type) {
-        const config = BUILDING_CONFIG[type];
+        const baseType = (type === 'WARRIOR_GUILD' || type === 'RANGER_GUILD') ? 'GUILD' : type;
+        const config = BUILDING_CONFIG[baseType];
         if (this.game.gold >= config.cost) {
             this.activeType = type;
             this.isBuilding = true;
@@ -51,7 +54,8 @@ export class BuildManager {
     handleClick(x, y) {
         if (!this.isBuilding) return false;
 
-        const config = BUILDING_CONFIG[this.activeType];
+        const baseType = (this.activeType === 'WARRIOR_GUILD' || this.activeType === 'RANGER_GUILD') ? 'GUILD' : this.activeType;
+        const config = BUILDING_CONFIG[baseType];
         
         if (this.game.gold < config.cost) {
             this.cancelBuild();
@@ -63,7 +67,14 @@ export class BuildManager {
         }
 
         this.game.gold -= config.cost;
-        const b = new EconomicBuilding(x, y, this.activeType, this.game);
+        let b;
+        if (this.activeType === 'WARRIOR_GUILD') {
+            b = new WarriorGuild(x, y, this.game);
+        } else if (this.activeType === 'RANGER_GUILD') {
+            b = new RangerGuild(x, y, this.game);
+        } else {
+            b = new EconomicBuilding(x, y, baseType, this.game);
+        }
         if (this.activeType !== 'CASTLE') {
             b.hp = 0;
             b.constructed = false;
@@ -80,7 +91,8 @@ export class BuildManager {
     drawPreview(ctx, mouseX, mouseY) {
         if (!this.isBuilding) return;
 
-        const config = BUILDING_CONFIG[this.activeType];
+        const baseType = (this.activeType === 'WARRIOR_GUILD' || this.activeType === 'RANGER_GUILD') ? 'GUILD' : this.activeType;
+        const config = BUILDING_CONFIG[baseType];
         const valid = this.canBuildAt(mouseX, mouseY, config);
         
         ctx.save();

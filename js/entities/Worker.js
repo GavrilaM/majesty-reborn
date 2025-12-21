@@ -1,4 +1,5 @@
 import { Utils } from '../utils.js';
+import { EconomicBuilding } from './EconomicBuilding.js';
 import { Particle } from './Particle.js';
 
 export class Worker {
@@ -92,7 +93,7 @@ export class Worker {
         let best = null;
         let bestScore = -Infinity;
         for (const e of game.entities) {
-            if (e.constructor.name === 'EconomicBuilding') {
+            if (e instanceof EconomicBuilding || e.constructor.name === 'EconomicBuilding') {
                 if (!e.constructed) {
                     const s = 1000 - Utils.dist(this.x, this.y, e.x, e.y);
                     if (s > bestScore) { bestScore = s; best = e; }

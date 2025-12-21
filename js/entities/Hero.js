@@ -42,7 +42,7 @@ export class Hero {
         this.attackCooldown = 0;
         this.lastDamageTime = 0;
 
-        this.state = 'IDLE';
+        this.state = 'DECISION';
         this.target = null;
         this.wanderTarget = { x: x, y: y };
         this.wanderTimer = 0;
@@ -135,8 +135,8 @@ export class Hero {
             case 'RETREAT':
                 this.behaviorRetreat(dt, game);
                 break;
-            case 'IDLE':
-                this.behaviorIdle(dt, game);
+            case 'DECISION':
+                this.behaviorDecision(dt, game);
                 break;
             case 'FIGHT':
                 this.behaviorFight(dt, game);
@@ -150,9 +150,91 @@ export class Hero {
             case 'VICTORY':
                 this.behaviorVictory(dt, game);
                 break;
+            case 'PATROL':
+                this.behaviorPatrol(dt, game);
+                break;
+            case 'EXPLORE':
+                this.behaviorExplore(dt, game);
+                break;
         }
     }
 
+    decideNextAction(game) {
+        const hasPotionNeed = !this.inventory.isBeltFull();
+        const lowGold = this.gold < 50;
+        const healthy = this.hp >= this.maxHp * 0.9;
+        const cls = this.type;
+        let exploreW = 0.5, patrolW = 0.5;
+        if (cls === 'RANGER') { exploreW = 0.75; patrolW = 0.25; if (healthy) exploreW = 0.85; }
+        if (cls === 'WARRIOR') { exploreW = 0.4; patrolW = 0.6; }
+        // Greed/Money influence
+        // Jika gold sedikit atau inventory kosong, tingkatkan keinginan Explore mencari loot
+        if (lowGold || hasPotionNeed) { exploreW += 0.2; patrolW -= 0.2; }
+        exploreW = Utils.clamp(exploreW, 0, 1); patrolW = Utils.clamp(patrolW, 0, 1);
+        const roll = Math.random();
+        if (roll < exploreW) {
+            const pt = this.getExplorePoint(game);
+            this.exploreTarget = pt;
+            this.exploreTimer = 6.0;
+            this.state = 'EXPLORE';
+        } else {
+            this.setupPatrolRoute(game);
+            this.state = 'PATROL';
+        }
+    }
+
+    getExplorePoint(game) {
+        const cx = game.castle.x, cy = game.castle.y;
+        const w = game.canvas.width, h = game.canvas.height;
+        let px = 0, py = 0;
+        let tries = 0;
+        do {
+            px = Math.random() * w;
+            py = Math.random() * h;
+            tries++;
+        } while (Utils.dist(px, py, cx, cy) < 300 && tries < 20);
+        return { x: px, y: py };
+    }
+
+    behaviorExplore(dt, game) {
+        if (!this.exploreTarget) { this.state = 'DECISION'; return; }
+        const d = Utils.dist(this.x, this.y, this.exploreTarget.x, this.exploreTarget.y);
+        if (d < 15) { this.state = 'DECISION'; this.exploreTarget = null; return; }
+        this.exploreTimer = (this.exploreTimer || 0) - dt;
+        if (this.exploreTimer <= 0) { this.state = 'DECISION'; this.exploreTarget = null; return; }
+        this.moveTowards(this.exploreTarget.x, this.exploreTarget.y, dt, game);
+    }
+
+    setupPatrolRoute(game) {
+        const doors = [];
+        const nearestGuild = game.entities
+            .filter(e => e.constructor.name === 'EconomicBuilding' && e.type === 'GUILD')
+            .sort((a, b) => Utils.dist(this.x, this.y, a.x, a.y) - Utils.dist(this.x, this.y, b.x, b.y))[0];
+        if (nearestGuild) doors.push(game.getDoorPoint(nearestGuild));
+        if (game.castle) doors.push(game.getDoorPoint(game.castle));
+        const market = game.entities
+            .filter(e => e.constructor.name === 'EconomicBuilding' && e.type === 'MARKET')
+            .sort((a, b) => Utils.dist(this.x, this.y, a.x, a.y) - Utils.dist(this.x, this.y, b.x, b.y))[0];
+        if (market) doors.push(game.getDoorPoint(market));
+        if (nearestGuild) doors.push(game.getDoorPoint(nearestGuild));
+        this.patrolRoute = doors;
+        this.patrolIdx = 0;
+        this.patrolTimer = 10.0;
+    }
+
+    behaviorPatrol(dt, game) {
+        if (!this.patrolRoute || this.patrolRoute.length === 0) { this.state = 'DECISION'; return; }
+        const tgt = this.patrolRoute[this.patrolIdx];
+        const d = Utils.dist(this.x, this.y, tgt.x, tgt.y);
+        if (d < 20) {
+            this.patrolIdx++;
+            if (this.patrolIdx >= this.patrolRoute.length) { this.state = 'DECISION'; return; }
+        } else {
+            this.moveTowards(tgt.x, tgt.y, dt, game);
+        }
+        this.patrolTimer = (this.patrolTimer || 0) - dt;
+        if (this.patrolTimer <= 0) { this.state = 'DECISION'; }
+    }
     findHome(game) {
         let best = game.castle;
         let minDist = Utils.dist(this.x, this.y, best.x, best.y);
@@ -172,7 +254,7 @@ export class Hero {
             } else {
                 this.visible = true;
             }
-            this.state = 'IDLE';
+            this.state = 'DECISION';
             this.target = null;
             game.entities.push(new Particle(this.x, this.y - 30, "Ready!", "lime"));
         }
@@ -183,22 +265,24 @@ export class Hero {
             this.target = this.findHome(game);
         }
 
-        if (Utils.dist(this.x, this.y, this.target.x, this.target.y) < 20) {
+        const door = game.getDoorPoint(this.target);
+        const distToDoor = Utils.dist(this.x, this.y, door.x, door.y);
+        if (this.visible && distToDoor < 18) {
             if (this.target.enter) {
                 this.target.enter(this);
             } else {
                 this.hp += 50 * dt;
                 if (this.hp >= this.maxHp) {
                     this.hp = this.maxHp;
-                    this.state = 'IDLE';
+                    this.state = 'DECISION';
                 }
             }
         } else {
-            this.moveTowards(this.target.x, this.target.y, dt, game);
+            this.moveTowards(door.x, door.y, dt, game);
         }
     }
 
-    behaviorIdle(dt, game) {
+    behaviorDecision(dt, game) {
         if (this.nextState) return;
         const range = this.stats.derived.perceptionRange;
         const nearbyMonsters = game.entities.filter(e => e.constructor.name === 'Monster' && Utils.dist(this.x, this.y, e.x, e.y) < range);
@@ -283,9 +367,8 @@ export class Hero {
             if (!dangerNearby || (this.personality.brave * morale > 0.8)) { this.state = 'QUEST'; this.target = flag; return; }
         }
 
-        // Fix: Force wander movement if IDLE and no target found
-        if (this.state === 'IDLE' && !this.target && !this.nextState) {
-            this.wander(dt, game);
+        if (!this.target && !this.nextState) {
+            this.decideNextAction(game);
         }
     }
 
@@ -386,7 +469,7 @@ export class Hero {
                 this.attackCooldown = 0;
                 this.state = 'VICTORY'; this.target = null; return;
             }
-            this.state = 'IDLE'; this.target = null; return;
+            this.state = 'DECISION'; this.target = null; return;
         }
 
         const config = CLASS_CONFIG[this.type];
@@ -473,14 +556,14 @@ export class Hero {
     behaviorShop(dt, game) {
         if (!this.target || this.target.remove) {
             const markets = game.entities.filter(e => e.constructor.name === 'EconomicBuilding' && e.type === 'MARKET' && !e.remove);
-            if (markets.length === 0) { this.state = 'IDLE'; return; }
+            if (markets.length === 0) { this.state = 'DECISION'; return; }
             this.target = markets.sort((a, b) => Utils.dist(this.x, this.y, a.x, a.y) - Utils.dist(this.x, this.y, b.x, b.y))[0];
         }
 
         const door = { x: this.target.x, y: this.target.y + (this.target.height/2) - 5 };
         const dist = Utils.dist(this.x, this.y, door.x, door.y);
 
-        if (!this.target.constructed) { this.state = 'IDLE'; return; }
+        if (!this.target.constructed) { this.state = 'DECISION'; return; }
         if (this.visible && dist < 18) {
             if (this.target.enter) {
                 this.target.enter(this);
@@ -495,14 +578,14 @@ export class Hero {
             if (this.shopTimer <= 0) {
                 this.lastShopTime = game.gameTime;
                 if (this.target && this.target.exit) this.target.exit(this);
-                this.state = 'IDLE';
+                this.state = 'DECISION';
                 this.target = null;
             }
         }
     }
 
     behaviorQuest(dt, game) {
-        if (!this.target || this.target.remove) { this.state = 'IDLE'; this.target = null; return; }
+        if (!this.target || this.target.remove) { this.state = 'DECISION'; this.target = null; return; }
         const dist = Utils.dist(this.x, this.y, this.target.x, this.target.y);
         if (dist < 20) {
             const reward = Math.floor(this.target.reward || 0);
@@ -770,8 +853,8 @@ export class Hero {
                     const facing = Utils.dot(dir.x, dir.y, bdir.x, bdir.y);
                     if (facing > 0.8) {
                         const perp = Utils.perp(dir.x, dir.y);
-                        this.x += perp.x * 15 * dt;
-                        this.y += perp.y * 15 * dt;
+                        this.acc.x += perp.x * 100 * dt;
+                        this.acc.y += perp.y * 100 * dt;
                     }
                 }
             }
@@ -821,9 +904,9 @@ export class Hero {
     behaviorVictory(dt, game) {
         if (this.victoryTimer > 0) {
             this.victoryTimer -= dt;
-            if (this.victoryTimer <= 0) this.state = 'IDLE';
+            if (this.victoryTimer <= 0) this.state = 'DECISION';
         } else {
-            this.state = 'IDLE';
+            this.state = 'DECISION';
         }
     }
 

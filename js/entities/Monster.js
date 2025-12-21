@@ -224,6 +224,10 @@ export class Monster {
             effectiveRange = attackRange + 10; 
         }
 
+        if (game && game.canvas) {
+            targetPoint.x = Math.max(0, Math.min(game.canvas.width, targetPoint.x));
+            targetPoint.y = Math.max(0, Math.min(game.canvas.height, targetPoint.y));
+        }
         const distToPoint = Utils.dist(this.x, this.y, targetPoint.x, targetPoint.y);
 
         if (distToPoint > effectiveRange) {
@@ -351,11 +355,11 @@ export class Monster {
                     const facing = Utils.dot(dir.x, dir.y, bdir.x, bdir.y);
                     if (facing > 0.8) {
                         const perp = Utils.perp(dir.x, dir.y);
-                        const stepX = perp.x * 12 * dt;
-                        const stepY = perp.y * 12 * dt;
-                        if (Number.isFinite(stepX) && Number.isFinite(stepY)) {
-                            this.x += stepX;
-                            this.y += stepY;
+                        const ax = perp.x * 100 * dt;
+                        const ay = perp.y * 100 * dt;
+                        if (Number.isFinite(ax) && Number.isFinite(ay)) {
+                            this.acc.x += ax;
+                            this.acc.y += ay;
                         }
                     }
                 }

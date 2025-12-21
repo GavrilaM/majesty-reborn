@@ -84,7 +84,8 @@ class Game {
     recruit(type, sourceBuilding = null) {
         const cost = type === 'RANGER' ? 350 : 200;
         const trainTime = type === 'RANGER' ? 3.0 : 2.0;
-        if (this.gold >= cost) {
+        const allowed = !sourceBuilding || !sourceBuilding.allowedRecruits ? true : sourceBuilding.allowedRecruits.includes(type);
+        if (this.gold >= cost && allowed) {
             this.gold -= cost;
             // PACING: Add to queue instead of instant spawn
             // Store source building to spawn at correct location
@@ -106,7 +107,7 @@ class Game {
     getObstacles() {
         const margin = 12;
         return this.entities
-            .filter(e => e.constructor.name === 'EconomicBuilding')
+            .filter(e => e instanceof EconomicBuilding || e.constructor.name === 'EconomicBuilding')
             .map(b => ({
                 x1: b.x - b.width/2 - margin,
                 y1: b.y - b.height/2 - margin,
@@ -334,12 +335,18 @@ class Game {
                 for (let j = i + 1; j < units.length; j++) {
                     const a = units[i], b = units[j];
                     const dx = b.x - a.x, dy = b.y - a.y;
-                    const dist = Math.hypot(dx, dy);
+                    let dist = Math.hypot(dx, dy);
                     const minDist = (a.radius || 12) + (b.radius || 12);
+                    if (dist === 0) {
+                        const jitter = 0.5;
+                        a.x -= jitter; a.y -= jitter;
+                        b.x += jitter; b.y += jitter;
+                        dist = Math.hypot(b.x - a.x, b.y - a.y);
+                    }
                     if (dist < minDist && dist > 0) {
                         const overlap = minDist - dist;
                         const nx = dx / dist, ny = dy / dist;
-                        const pushAmount = overlap * 0.5;
+                        const pushAmount = overlap * 0.35;
                         if (!a.isEngaged) { a.x -= nx * pushAmount; a.y -= ny * pushAmount; }
                         if (!b.isEngaged) { b.x += nx * pushAmount; b.y += ny * pushAmount; }
                     }
@@ -360,7 +367,7 @@ class Game {
 
             // Buildings: y is center, bottom is y + height/2
             // Adjust offset to push buildings slightly behind units on doorstep
-            if (a.constructor.name === 'EconomicBuilding') {
+            if (a instanceof EconomicBuilding || a.constructor.name === 'EconomicBuilding') {
                 aBottomY = a.y + a.height / 2 - 10; // Push buildings behind units
             } else if (a.constructor.name === 'Building') {
                 aBottomY = a.y + (a.height || 60) / 2 - 10;
@@ -369,7 +376,7 @@ class Game {
                 aBottomY = a.y + (a.radius || 15);
             }
 
-            if (b.constructor.name === 'EconomicBuilding') {
+            if (b instanceof EconomicBuilding || b.constructor.name === 'EconomicBuilding') {
                 bBottomY = b.y + b.height / 2 - 10; // Push buildings behind units
             } else if (b.constructor.name === 'Building') {
                 bBottomY = b.y + (b.height || 60) / 2 - 10;
