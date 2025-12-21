@@ -38,6 +38,9 @@ export class Monster {
         this.lungeVec = { x: 0, y: 0 };
         this.flashTimer = 0;
         this.targetStickTimer = 0;
+        this.moveBlocked = false;
+        this.blockedTimer = 0;
+        this.blockedSide = 0;
 
         // AGGRO SYSTEM
         this.aggroTarget = null; // Hero or Tower who damaged us (for retaliation)
@@ -205,10 +208,27 @@ export class Monster {
 
         const distToTarget = Utils.dist(this.x, this.y, this.target.x, this.target.y);
         const attackRange = this.radius + 20;
+        
+        // Fix: For large buildings, distance to center is misleading. 
+        // Use distance to edge/door if target is a building.
+        let effectiveRange = attackRange;
+        let targetPoint = { x: this.target.x, y: this.target.y };
 
-        if (distToTarget > attackRange) {
+        const isBuilding = this.target.constructor.name === 'EconomicBuilding' || this.target.constructor.name === 'Building';
+        if (isBuilding) {
+            // Use door point or approximate edge
+            if (game.getDoorPoint) {
+                targetPoint = game.getDoorPoint(this.target);
+            }
+            // Increase range slightly for buildings to account for size
+            effectiveRange = attackRange + 10; 
+        }
+
+        const distToPoint = Utils.dist(this.x, this.y, targetPoint.x, targetPoint.y);
+
+        if (distToPoint > effectiveRange) {
             // Move towards target
-            const dx = this.target.x - this.x, dy = this.target.y - this.y;
+            const dx = targetPoint.x - this.x, dy = targetPoint.y - this.y;
             const dist = Math.hypot(dx, dy);
             const dir = dist > 0 ? { x: dx / dist, y: dy / dist } : { x: 0, y: 0 };
             const arriveRadius = 50;
@@ -222,7 +242,16 @@ export class Monster {
                 const door = game.getDoorPoint(this.siegeTarget);
                 flow = game.getFlowVector(this.siegeTarget.id + ':door', door.x, door.y, this.x, this.y);
             }
-            const blendDir = Utils.normalize(dir.x + flow.x * 0.6, dir.y + flow.y * 0.6);
+            let blendDir = Utils.normalize(dir.x + flow.x * 0.6, dir.y + flow.y * 0.6);
+            if (this.moveBlocked) {
+                if (this.blockedTimer <= 0) { this.blockedTimer = 0.35; this.blockedSide = Math.random() < 0.5 ? -1 : 1; }
+                const perp = Utils.perp(blendDir.x, blendDir.y);
+                const steerSide = { x: perp.x * this.blockedSide, y: perp.y * this.blockedSide };
+                blendDir = Utils.normalize(blendDir.x + steerSide.x * 0.8, blendDir.y + steerSide.y * 0.8);
+            } else {
+                if (this.blockedTimer > 0) this.blockedTimer = Math.max(0, this.blockedTimer - dt);
+                if (this.blockedTimer <= 0) this.blockedSide = 0;
+            }
             const desired = { x: blendDir.x * desiredSpeed, y: blendDir.y * desiredSpeed };
             const steer = { x: desired.x - this.vel.x, y: desired.y - this.vel.y };
             const limited = Utils.limitVec(steer.x, steer.y, this.speed);
@@ -289,6 +318,7 @@ export class Monster {
             if (e === this || e.remove) return;
             const isUnit = e.constructor.name === 'Monster' || e.constructor.name === 'Hero' || e.constructor.name === 'Worker' || e.constructor.name === 'CastleGuard';
             if (isUnit) {
+                if (e.visible === false) return;
                 const dist = Utils.dist(this.x, this.y, e.x, e.y);
                 const minGap = this.radius + e.radius;
                 if (dist < minGap && dist > 0) {
@@ -296,14 +326,16 @@ export class Monster {
                     const ny = (this.y - e.y) / dist;
                     const overlap = (minGap - dist);
                     const pushStrength = overlap * 0.5;
-                    if (!this.isEngaged) {
-                        this.x += nx * pushStrength;
-                        this.y += ny * pushStrength;
-                    }
                     const scale = this.isEngaged ? 0.0 : 0.3;
                     sepX += nx * overlap * scale;
                     sepY += ny * overlap * scale;
                 }
+                const fx = this.target ? this.target.x : this.x;
+                const fy = this.target ? this.target.y : this.y;
+                const dir = Utils.normalize(fx - this.x, fy - this.y);
+                const ax = e.x - this.x, ay = e.y - this.y;
+                const aheadDot = Utils.dot(dir.x, dir.y, (ax / ((dist||1))), (ay / ((dist||1))));
+                if (aheadDot > 0.6 && dist < minGap * 0.8) this.moveBlocked = true;
             }
             if (e.constructor.name === 'EconomicBuilding') {
                 const tx = this.target ? this.target.x : this.x;
@@ -328,6 +360,13 @@ export class Monster {
     }
 
     integrate(dt, game) {
+        // Safety check for NaN coordinates (Ghost Monster Fix)
+        if (isNaN(this.x) || isNaN(this.y)) {
+            this.hp = 0; 
+            this.remove = true;
+            return;
+        }
+
         // HARD STOP when engaged in combat
         if (this.isEngaged) {
             this.vel.x = 0; this.vel.y = 0;

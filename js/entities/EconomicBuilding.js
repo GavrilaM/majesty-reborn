@@ -30,6 +30,8 @@ export class EconomicBuilding {
         this.remove = false;
         this.constructed = type === 'CASTLE';
         this.isUnderConstruction = !this.constructed;
+        this.opacity = 1.0;
+        this.targetOpacity = 1.0;
     }
 
     update(dt, game) {
@@ -63,6 +65,23 @@ export class EconomicBuilding {
 
         if (this.constructed && this.type === 'TOWER') this.updateTowerDefense(dt, game);
         if (this.constructed && this.type === 'MARKET') this.updateMarketTrade(dt, game);
+
+        const margin = 8;
+        const x1 = this.x - this.width / 2 - margin;
+        const x2 = this.x + this.width / 2 + margin;
+        const y1 = this.y - this.height / 2 - margin;
+        const y2 = this.y;
+        let occluded = false;
+        for (const e of game.entities) {
+            if (e.remove) continue;
+            const isUnit = e.constructor.name === 'Hero' || e.constructor.name === 'Monster' || e.constructor.name === 'Worker' || e.constructor.name === 'CastleGuard';
+            if (!isUnit) continue;
+            if (!e.visible) continue;
+            if (e.x >= x1 && e.x <= x2 && e.y >= y1 && e.y <= y2 && e.y < this.y) { occluded = true; break; }
+        }
+        this.targetOpacity = occluded ? 0.4 : 1.0;
+        const t = Math.min(1, dt * 6);
+        this.opacity = Utils.lerp(this.opacity, this.targetOpacity, t);
     }
 
     enter(hero) {
@@ -70,6 +89,8 @@ export class EconomicBuilding {
         if (!this.visitors.includes(hero)) {
             this.visitors.push(hero);
             hero.visible = false;
+            hero.inBuilding = this;
+            hero.x = -10000; hero.y = -10000;
 
             // NEW: If this is a Market, attempt to sell potions
         if (this.type === 'MARKET') {
@@ -83,6 +104,7 @@ export class EconomicBuilding {
         if (idx !== -1) {
             this.visitors.splice(idx, 1);
             hero.visible = true;
+            hero.inBuilding = null;
             hero.x = this.x;
             hero.y = this.y + (this.height / 2) + 15; // Spawn at feet
         }
@@ -214,6 +236,7 @@ export class EconomicBuilding {
     draw(ctx) {
         ctx.save();
         ctx.translate(this.x, this.y);
+        ctx.globalAlpha = this.opacity;
 
         // Building Body
         ctx.fillStyle = this.color;

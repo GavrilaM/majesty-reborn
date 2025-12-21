@@ -263,6 +263,11 @@ class Game {
             this.entities.push(new Particle(this.castle.x, this.castle.y - 60, `+${income}g`, "yellow"));
         }
 
+        // Recompute obstacles occasionally to handle new buildings
+        if (this.builder.isBuilding || this.gameTime % 1.0 < dt) {
+            this.flowCache.clear();
+        }
+
         // PACING: Process Recruitment Queue
         if (this.recruitQueue.length > 0) {
             const nextRecruit = this.recruitQueue[0];

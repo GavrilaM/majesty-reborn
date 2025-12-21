@@ -66,6 +66,8 @@ export class Hero {
         this.nextState = null; this.nextTarget = null;
         this.isEngaged = false; this.engagedLockTimer = 0;
         this.moveBlocked = false;
+        this.blockedTimer = 0;
+        this.blockedSide = 0;
         this.victoryTimer = 0;
         this.attackWindup = 0;
         this.lungeTimer = 0;
@@ -76,9 +78,29 @@ export class Hero {
     }
 
     update(dt, game) {
+        // Fix: Safety check for NaN coordinates
+        if (isNaN(this.x) || isNaN(this.y)) {
+            this.x = game.castle.x;
+            this.y = game.castle.y + 60;
+            this.vel = { x: 0, y: 0 };
+            this.acc = { x: 0, y: 0 };
+        }
+
         if (this.hp <= 0) { this.remove = true; return; }
 
         if (!this.visible) {
+            // Fix: Ensure we are actually inside a building (visitor list)
+            // If not found in any building, force visible + idle
+            if (this.state === 'SHOP' || this.state === 'RETREAT') {
+                const inside = game.entities.some(e => 
+                    e.constructor.name === 'EconomicBuilding' && e.visitors.includes(this)
+                );
+                if (!inside) {
+                    this.visible = true;
+                    this.state = 'IDLE';
+                }
+            }
+            
             if (this.state === 'SHOP') {
                 this.behaviorShop(dt, game);
             } else {
@@ -192,6 +214,9 @@ export class Hero {
     }
 
     behaviorIdle(dt, game) {
+        const range = this.stats.derived.perceptionRange;
+        const nearbyMonsters = game.entities.filter(e => e.constructor.name === 'Monster' && Utils.dist(this.x, this.y, e.x, e.y) < range);
+        const dangerNearby = nearbyMonsters.some(m => Utils.dist(this.x, this.y, m.x, m.y) < 120);
         // SHOPPING CHECK
         // If we have gold and need potions (belt not full), go shop!
         // FIX: Add cooldown check to prevent loop
@@ -199,7 +224,7 @@ export class Hero {
             if (game.gameTime - this.lastShopTime > 10) { // 10s cooldown
                 // Check if market exists
                 const hasMarket = game.entities.some(e => e.constructor.name === 'EconomicBuilding' && e.type === 'MARKET' && !e.remove);
-                if (hasMarket) {
+                if (hasMarket && !dangerNearby) {
                     this.nextState = 'SHOP';
                     this.nextTarget = null; // Will find target in behaviorShop
                     this.reactionTimer = Utils.rand(0.2, 0.7);
@@ -209,10 +234,10 @@ export class Hero {
             }
         }
 
-        const range = this.stats.derived.perceptionRange;
-        const nearbyMonsters = game.entities.filter(e => e.constructor.name === 'Monster' && Utils.dist(this.x, this.y, e.x, e.y) < range);
+        
 
         // PERSONALITY: Find preferred target based on traits
+        // Fix: Weigh distance more heavily to prevent "cross-map" targeting
         const target = this.findPreferredTarget(nearbyMonsters);
 
         if (target) {
@@ -268,28 +293,14 @@ export class Hero {
         const flags = game.entities.filter(e => e.constructor.name === 'Flag');
         if (flags.length > 0) {
             const flag = flags[0];
-            if (flag.reward * this.personality.greedy > 50) { this.state = 'QUEST'; this.target = flag; return; }
+            const morale = this.calculateMorale(game);
+            if (!dangerNearby || (this.personality.brave * morale > 0.8)) { this.state = 'QUEST'; this.target = flag; return; }
         }
 
-        // BEHAVIOR: Warrior Defense / Patrol
-        // Warriors with high bravery/social (duty) prefer to stay near the Castle
-        if (this.type === 'WARRIOR') {
-            const defendDesire = (this.personality.brave + this.personality.social) / 2;
-            if (defendDesire > 0.6) {
-                // Check distance to Castle
-                const castle = game.castle; // Assuming game.castle exists
-                if (castle) {
-                    const distToCastle = Utils.dist(this.x, this.y, castle.x, castle.y);
-                    if (distToCastle > 200) {
-                        // Too far, patrol back
-                        this.moveTowards(castle.x, castle.y, dt, game);
-                        return;
-                    }
-                }
-            }
+        // Fix: Force wander movement if IDLE and no target found
+        if (this.state === 'IDLE' && !this.target && !this.nextState) {
+            this.wander(dt, game);
         }
-
-        this.wander(dt, game);
     }
 
     findNearbyAllies(game, range) {
@@ -336,10 +347,7 @@ export class Hero {
         if (!monsters || monsters.length === 0) return null;
 
         // 1. Filter out "Too Dangerous" targets
-        // Threshold depends on bravery. 
-        // Brave (1.0) tolerates score 100. Coward (0.0) tolerates score 20.
         const dangerTolerance = 20 + (this.personality.brave * 80);
-
         const validTargets = monsters.filter(m => {
             const threat = this.evaluateThreatLevel(m);
             return threat < dangerTolerance;
@@ -347,27 +355,35 @@ export class Hero {
 
         if (validTargets.length === 0) return null;
 
-        // 2. Sort by Preference
+        // 2. Score-based Sorting (Weighted)
         return validTargets.sort((a, b) => {
-            // GREEDY: Prioritize Gold/Loot
-            if (this.personality.greedy > 0.7) {
-                return (b.goldValue || 0) - (a.goldValue || 0);
-            }
-
-            // BRAVE: Prioritize Strongest (Max HP)
-            if (this.personality.brave > 0.7) {
-                return b.maxHp - a.maxHp;
-            }
-
-            // SMART: Prioritize Weakest (Kill fast)
-            if (this.personality.smart > 0.7) {
-                return a.hp - b.hp;
-            }
-
-            // DEFAULT: Closest
             const distA = Utils.dist(this.x, this.y, a.x, a.y);
             const distB = Utils.dist(this.x, this.y, b.x, b.y);
-            return distA - distB;
+            
+            // Base Score: Negative Distance (closer is better)
+            // Weight distance heavily to prevent bad traffic
+            let scoreA = -distA * 2.0; 
+            let scoreB = -distB * 2.0;
+
+            // GREEDY: Bonus for Gold
+            if (this.personality.greedy > 0.7) {
+                scoreA += (a.goldValue || 0) * 5;
+                scoreB += (b.goldValue || 0) * 5;
+            }
+
+            // BRAVE: Bonus for Max HP (Big targets)
+            if (this.personality.brave > 0.7) {
+                scoreA += (a.maxHp || 0) * 0.5;
+                scoreB += (b.maxHp || 0) * 0.5;
+            }
+
+            // SMART: Bonus for Low HP (Easy kills)
+            if (this.personality.smart > 0.7) {
+                scoreA += (1000 - a.hp); // Lower HP = Higher Score
+                scoreB += (1000 - b.hp);
+            }
+
+            return scoreB - scoreA; // Descending score
         })[0];
     }
 
@@ -628,7 +644,7 @@ export class Hero {
     }
 
     moveTowards(tx, ty, dt, game) {
-        if (this.actionLockTimer > 0 || this.isAiming || this.moveBlocked) return;
+        if (this.actionLockTimer > 0 || this.isAiming) return;
         let maxSpeed = CLASS_CONFIG[this.type].baseSpeed * this.stats.derived.moveSpeedMultiplier * (this.skillActive?.speedMult || 1);
         const staminaPct = this.stamina / this.maxStamina; if (staminaPct < 0.2) maxSpeed *= 0.5;
         const dx = tx - this.x, dy = ty - this.y;
@@ -656,7 +672,16 @@ export class Hero {
             flow = game.getFlowVector('castle:door', door.x, door.y, this.x, this.y);
         }
         const flowWeight = 0.6;
-        const blendDir = Utils.normalize(dir.x + flow.x * flowWeight, dir.y + flow.y * flowWeight);
+        let blendDir = Utils.normalize(dir.x + flow.x * flowWeight, dir.y + flow.y * flowWeight);
+        if (this.moveBlocked) {
+            if (this.blockedTimer <= 0) { this.blockedTimer = 0.35; this.blockedSide = Math.random() < 0.5 ? -1 : 1; }
+            const perp = Utils.perp(blendDir.x, blendDir.y);
+            const steerSide = { x: perp.x * this.blockedSide, y: perp.y * this.blockedSide };
+            blendDir = Utils.normalize(blendDir.x + steerSide.x * 0.8, blendDir.y + steerSide.y * 0.8);
+        } else {
+            if (this.blockedTimer > 0) this.blockedTimer = Math.max(0, this.blockedTimer - dt);
+            if (this.blockedTimer <= 0) this.blockedSide = 0;
+        }
         // Prevent desired speed from becoming too tiny outside stop radius
         const minCruise = (dist > stopRadius) ? maxSpeed * 0.25 : 0;
         const finalSpeed = Math.max(desiredSpeed, minCruise);
@@ -720,6 +745,7 @@ export class Hero {
             if (e === this || e.remove) return;
             const isUnit = e.constructor.name === 'Hero' || e.constructor.name === 'Monster' || e.constructor.name === 'Worker' || e.constructor.name === 'CastleGuard';
             if (isUnit) {
+                if (e.visible === false) return;
                 const dist = Utils.dist(this.x, this.y, e.x, e.y);
                 const minGap = this.radius + (e.radius || 12);
                 if (dist < minGap && dist > 0) {
@@ -727,10 +753,6 @@ export class Hero {
                     const ny = (this.y - e.y) / dist;
                     const overlap = minGap - dist;
                     const pushStrength = overlap * 0.5;
-                    if (!this.isEngaged) {
-                        this.x += nx * pushStrength;
-                        this.y += ny * pushStrength;
-                    }
                     const scale = this.isEngaged ? 0.0 : 0.3;
                     sepX += nx * overlap * scale;
                     sepY += ny * overlap * scale;
@@ -740,7 +762,10 @@ export class Hero {
                 const dir = Utils.normalize(fx - this.x, fy - this.y);
                 const ax = e.x - this.x, ay = e.y - this.y;
                 const aheadDot = Utils.dot(dir.x, dir.y, (ax / ((dist||1))), (ay / ((dist||1))));
-                if (aheadDot > 0.6 && dist < minGap * 0.8) this.moveBlocked = true;
+                
+                // Fix: Don't self-block if we are in critical movement states (SHOP/RETREAT)
+                const criticalState = this.state === 'SHOP' || this.state === 'RETREAT';
+                if (!criticalState && aheadDot > 0.6 && dist < minGap * 0.8) this.moveBlocked = true;
             }
 
             if (e.constructor.name === 'EconomicBuilding') {
