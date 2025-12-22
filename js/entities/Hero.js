@@ -6,6 +6,7 @@ import { Projectile } from './Projectile.js';
 import { Particle } from './Particle.js';
 import { ItemDrop } from './ItemDrop.js';
 import { ITEM_CONFIG } from '../config/ItemConfig.js';
+import { DebugLogger } from '../systems/DebugLogger.js';
 
 export class Hero {
     constructor(x, y, type) {
@@ -81,6 +82,7 @@ export class Hero {
         this.isInsideBuilding = false;
         this.buildingTimeout = 0;
         this.stuckAttempts = 0;
+        this.doorApproachTimer = 0;
     }
 
     update(dt, game) {
@@ -95,8 +97,8 @@ export class Hero {
         if (this.hp <= 0) { this.remove = true; return; }
 
         if (!this.visible) {
-            if (this.state === 'SHOP') { this.behaviorShop(dt, game); return; }
-            if (this.state === 'RETREAT') { this.behaviorResting(dt, game); return; }
+            if (this.state === 'SHOP_INSIDE') { this.behaviorShopInside(dt, game); return; }
+            if (this.state === 'RESTING_INSIDE') { this.behaviorRestingInside(dt, game); return; }
             return;
         }
 
@@ -141,6 +143,12 @@ export class Hero {
             case 'RETREAT':
                 this.behaviorRetreat(dt, game);
                 break;
+            case 'RETREAT_ENTERING':
+                this.behaviorRetreatEntering(dt, game);
+                break;
+            case 'RESTING_INSIDE':
+                this.behaviorRestingInside(dt, game);
+                break;
             case 'DECISION':
                 this.behaviorDecision(dt, game);
                 break;
@@ -152,6 +160,12 @@ export class Hero {
                 break;
             case 'SHOP':
                 this.behaviorShop(dt, game);
+                break;
+            case 'SHOP_ENTERING':
+                this.behaviorShopEntering(dt, game);
+                break;
+            case 'SHOP_INSIDE':
+                this.behaviorShopInside(dt, game);
                 break;
             case 'VICTORY':
                 this.behaviorVictory(dt, game);
@@ -315,18 +329,70 @@ export class Hero {
 
         const door = game.getDoorPoint(this.target);
         const distToDoor = Utils.dist(this.x, this.y, door.x, door.y);
-        if (this.visible && distToDoor < 18) {
-            if (this.target.enter) {
-                this.target.enter(this);
-            } else {
-                this.hp += 50 * dt;
-                if (this.hp >= this.maxHp) {
-                    this.hp = this.maxHp;
-                    this.state = 'DECISION';
+        if (this.visible) {
+            if (distToDoor < 40 && !this.isInsideBuilding) {
+                this.doorApproachTimer += dt;
+                if (distToDoor < 25 || this.doorApproachTimer > 2.0) {
+                    const entered = this.target.enter && this.target.enter(this);
+                    if (entered || this.isInsideBuilding) {
+                        this.state = 'RESTING_INSIDE';
+                        this.doorApproachTimer = 0;
+                    } else {
+                        this.state = 'DECISION';
+                        this.doorApproachTimer = 0;
+                        return;
+                    }
+                } else {
+                    const dx = door.x - this.x, dy = door.y - this.y;
+                    const len = Math.hypot(dx, dy) || 1;
+                    this.acc.x += (dx / len) * 120 * dt;
+                    this.acc.y += (dy / len) * 120 * dt;
                 }
+            } else {
+                this.moveTowards(door.x, door.y, dt, game);
             }
-        } else {
-            this.moveTowards(door.x, door.y, dt, game);
+        }
+    }
+
+    behaviorRetreatEntering(dt, game) {
+        if (!this.target) { this.state = 'DECISION'; return; }
+        const door = game.getDoorPoint(this.target);
+        const dist = Utils.dist(this.x, this.y, door.x, door.y);
+        this.doorApproachTimer += dt;
+        if (dist < 25 || this.doorApproachTimer > 2.0) {
+            const entered = this.target.enter && this.target.enter(this);
+            if (entered || this.isInsideBuilding) {
+                this.state = 'RESTING_INSIDE';
+                this.doorApproachTimer = 0;
+                return;
+            } else {
+                this.state = 'DECISION';
+                this.doorApproachTimer = 0;
+                return;
+            }
+        }
+        const dx = door.x - this.x, dy = door.y - this.y;
+        const len = Math.hypot(dx, dy) || 1;
+        this.acc.x += (dx / len) * 120 * dt;
+        this.acc.y += (dy / len) * 120 * dt;
+
+    }
+
+    behaviorRestingInside(dt, game) {
+        if (this.hp >= this.maxHp) {
+            if (this.target && this.target.exit) this.target.exit(this);
+            this.state = 'DECISION';
+            this.target = null;
+            game.entities.push(new Particle(this.x, this.y - 30, "Ready!", "lime"));
+            return;
+        }
+        if (this.isInsideBuilding && this.buildingTimeout > 0) {
+            this.buildingTimeout -= dt;
+            if (this.buildingTimeout <= 0) {
+                if (this.target && this.target.exit) this.target.exit(this);
+                this.state = 'DECISION';
+                this.target = null;
+            }
         }
     }
 
@@ -612,25 +678,70 @@ export class Hero {
         const dist = Utils.dist(this.x, this.y, door.x, door.y);
 
         if (!this.target.constructed) { this.state = 'DECISION'; return; }
-        if (this.visible && dist < 18) {
-            if (this.target.enter) {
-                this.shopTimer = 3.0;
-                this.buildingTimeout = 10.0;
-                this.target.enter(this);
+        if (this.visible) {
+            DebugLogger.log('SHOP', this.name, 'APPROACH', { dist, visible: this.visible, isInside: this.isInsideBuilding, state: this.state });
+            if (dist < 40 && !this.isInsideBuilding) {
+                this.doorApproachTimer += dt;
+                if (dist < 25 || this.doorApproachTimer > 2.0) {
+                    const entered = this.target.enter && this.target.enter(this);
+                    if (entered || this.isInsideBuilding) {
+                        this.shopTimer = 3.0;
+                        this.state = 'SHOP_INSIDE';
+                        this.doorApproachTimer = 0;
+                        DebugLogger.log('SHOP', this.name, 'ENTER', { building: this.target?.type });
+                    } else {
+                        this.state = 'DECISION';
+                        this.doorApproachTimer = 0;
+                        return;
+                    }
+                } else {
+                    const dx = door.x - this.x, dy = door.y - this.y;
+                    const len = Math.hypot(dx, dy) || 1;
+                    this.acc.x += (dx / len) * 120 * dt;
+                    this.acc.y += (dy / len) * 120 * dt;
+                }
+            } else {
+                this.moveTowards(door.x, door.y, dt, game);
             }
-        } else if (this.visible) {
-            this.moveTowards(door.x, door.y, dt, game);
         }
 
-        if (!this.visible && this.isInsideBuilding && this.state === 'SHOP') {
-            if (this.shopTimer > 0) this.shopTimer -= dt;
-            if (this.buildingTimeout > 0) this.buildingTimeout -= dt;
-            if (this.shopTimer <= 0 || this.buildingTimeout <= 0) {
-                this.lastShopTime = game.gameTime;
-                if (this.target && this.target.exit) this.target.exit(this);
+        if (this.state === 'SHOP_INSIDE' && !this.visible && this.isInsideBuilding) {
+            this.behaviorShopInside(dt, game);
+        }
+    }
+
+    behaviorShopEntering(dt, game) {
+        if (!this.target) { this.state = 'DECISION'; return; }
+        const door = { x: this.target.x, y: this.target.y + (this.target.height/2) - 5 };
+        const dist = Utils.dist(this.x, this.y, door.x, door.y);
+        this.doorApproachTimer += dt;
+        if (dist < 25 || this.doorApproachTimer > 2.0) {
+            const entered = this.target.enter && this.target.enter(this);
+            if (entered || this.isInsideBuilding) {
+                this.shopTimer = 3.0;
+                this.state = 'SHOP_INSIDE';
+                this.doorApproachTimer = 0;
+                return;
+            } else {
                 this.state = 'DECISION';
-                this.target = null;
+                this.doorApproachTimer = 0;
+                return;
             }
+        }
+        const dx = door.x - this.x, dy = door.y - this.y;
+        const len = Math.hypot(dx, dy) || 1;
+        this.acc.x += (dx / len) * 120 * dt;
+        this.acc.y += (dy / len) * 120 * dt;
+    }
+
+    behaviorShopInside(dt, game) {
+        if (this.shopTimer > 0) this.shopTimer -= dt;
+        if (this.buildingTimeout > 0) this.buildingTimeout -= dt;
+        if (this.shopTimer <= 0 || this.buildingTimeout <= 0) {
+            this.lastShopTime = game.gameTime;
+            if (this.target && this.target.exit) this.target.exit(this);
+            this.state = 'DECISION';
+            this.target = null;
         }
     }
 

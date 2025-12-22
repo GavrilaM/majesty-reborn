@@ -3,6 +3,7 @@ import { Projectile } from './Projectile.js';
 import { Particle } from './Particle.js';
 import { BUILDING_CONFIG } from '../config/BuildingConfig.js';
 import { ITEM_CONFIG } from '../config/ItemConfig.js';
+import { DebugLogger } from '../systems/DebugLogger.js';
 
 export class EconomicBuilding {
     constructor(x, y, type, game = null) {
@@ -85,7 +86,7 @@ export class EconomicBuilding {
     }
 
     enter(hero) {
-        if (!this.constructed) return;
+        if (!this.constructed) return false;
         if (!this.visitors.includes(hero)) {
             this.visitors.push(hero);
             hero.visible = false;
@@ -100,6 +101,8 @@ export class EconomicBuilding {
             this.attemptPotionSale(hero);
         }
         }
+        DebugLogger.log('ENTER', hero.name, 'ENTERING_BUILDING', { buildingType: this.type, buildingId: this.id });
+        return true;
     }
 
     exit(hero) {
@@ -112,6 +115,7 @@ export class EconomicBuilding {
             hero.buildingTimeout = 0;
             hero.x = this.x;
             hero.y = this.y + (this.height / 2) + 15; // Spawn at feet
+            DebugLogger.log('EXIT', hero.name, 'EXITING_BUILDING', { buildingType: this.type, newPosition: { x: hero.x, y: hero.y } });
         }
     }
 

@@ -25,6 +25,7 @@ class Game {
         this.gameOver = false;
         this.taxTimer = 0;
         this.taxInterval = 5;
+        this.debugMode = false;
         this.ui = new UIManager(this);
         this.builder = new BuildManager(this);
         this.recruitQueue = []; // PACING: Queue for hero training
@@ -74,6 +75,27 @@ class Game {
             if (this.flagMode) this.toggleFlagMode();
             this.ui.deselect();
         });
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'F3') {
+                this.debugMode = !this.debugMode;
+                const msg = document.getElementById('game-msg');
+                if (msg) msg.innerText = this.debugMode ? 'Debug Overlay: ON' : 'Debug Overlay: OFF';
+                const btn = document.getElementById('btn-debug');
+                if (btn) btn.innerText = this.debugMode ? 'DEBUG ON' : 'DEBUG OFF';
+                this.entities.push(new Particle(this.castle.x, this.castle.y - 80, this.debugMode ? 'Debug ON' : 'Debug OFF', this.debugMode ? 'lime' : 'red'));
+            }
+        });
+        const btnDebug = document.getElementById('btn-debug');
+        if (btnDebug) {
+            btnDebug.innerText = 'DEBUG OFF';
+            btnDebug.onclick = () => {
+                this.debugMode = !this.debugMode;
+                btnDebug.innerText = this.debugMode ? 'DEBUG ON' : 'DEBUG OFF';
+                const msg = document.getElementById('game-msg');
+                if (msg) msg.innerText = this.debugMode ? 'Debug Overlay: ON' : 'Debug Overlay: OFF';
+                this.entities.push(new Particle(this.castle.x, this.castle.y - 80, this.debugMode ? 'Debug ON' : 'Debug OFF', this.debugMode ? 'lime' : 'red'));
+            };
+        }
     }
 
     resize() {
@@ -390,6 +412,32 @@ class Game {
 
         this.entities.forEach(e => e.draw(this.ctx));
         this.builder.drawPreview(this.ctx, this.mouseX, this.mouseY);
+        
+        if (this.debugMode) {
+            const ctx = this.ctx;
+            ctx.save();
+            ctx.font = '10px monospace';
+            ctx.textAlign = 'left';
+            this.entities.forEach(e => {
+                if (e.constructor.name === 'Hero') {
+                    const vis = e.visible ? 1 : 0;
+                    const inB = e.isInsideBuilding ? 1 : 0;
+                    const shopT = (e.shopTimer || 0).toFixed(1);
+                    const restT = (e.buildingTimeout || 0).toFixed(1);
+                    const doorT = (e.doorApproachTimer || 0).toFixed(1);
+                    const txt = `${e.state} | vis:${vis} | in:${inB} | t:${shopT}/${restT}/${doorT}`;
+                    let dx = e.x, dy = e.y - 50;
+                    if (!e.visible) {
+                        const b = e.inBuilding;
+                        if (b) { dx = b.x; dy = b.y - 60; }
+                        else { dx = this.castle.x; dy = this.castle.y - 80; }
+                    }
+                    ctx.fillStyle = e.visible ? '#0f0' : '#ff5555';
+                    ctx.fillText(txt, dx + 6, dy);
+                }
+            });
+            ctx.restore();
+        }
     }
 
     endGame() {
