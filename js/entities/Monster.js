@@ -126,11 +126,15 @@ export class Monster {
             });
 
             if (nearbyUnit) {
-                this.target = nearbyUnit;
-                this.reactionTimer = Utils.rand(0.2, 0.7);
-                this.siegeTarget = null;
-                this.siegeLockTimer = 0;
-                this.targetStickTimer = 2.0;
+                const currentDist = this.getDistanceToTarget(game);
+                const newDist = Utils.dist(this.x, this.y, nearbyUnit.x, nearbyUnit.y);
+                const switchThreshold = 1.5;
+                if (!this.target || (newDist * switchThreshold < currentDist)) {
+                    this.target = nearbyUnit;
+                    this.reactionTimer = Utils.rand(0.2, 0.7);
+                    this.targetStickTimer = 3.0;
+                    // Keep siegeTarget to return later if hero escapes
+                }
             }
         }
 
@@ -267,7 +271,8 @@ export class Monster {
             const limited = Utils.limitVec(steer.x, steer.y, this.speed);
             this.acc.x += limited.x; this.acc.y += limited.y;
             this.isEngaged = false; this.engagedLockTimer = 0;
-            this.preparedAttack = false; // Reset attack prep if we move
+            const moved = Math.hypot(this.x - this.prevX, this.y - this.prevY);
+            if (moved > 5) this.preparedAttack = false;
         }
         else {
             // In attack range
@@ -308,6 +313,16 @@ export class Monster {
             this.acc.x = 0; this.acc.y = 0;
         }
         if (this.targetStickTimer > 0) this.targetStickTimer -= dt;
+    }
+    
+    getDistanceToTarget(game) {
+        if (!this.target) return Infinity;
+        const isBuilding = this.target.constructor.name === 'EconomicBuilding' || this.target.constructor.name === 'Building';
+        if (isBuilding && game && game.getDoorPoint) {
+            const door = game.getDoorPoint(this.target);
+            return Utils.dist(this.x, this.y, door.x, door.y);
+        }
+        return Utils.dist(this.x, this.y, this.target.x, this.target.y);
     }
     
     canAcceptMeleeAttacker() {

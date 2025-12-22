@@ -78,6 +78,9 @@ export class Hero {
         this.stuckTimer = 0;
         this.lastMoveX = x;
         this.lastMoveY = y;
+        this.isInsideBuilding = false;
+        this.buildingTimeout = 0;
+        this.stuckAttempts = 0;
     }
 
     update(dt, game) {
@@ -196,7 +199,17 @@ export class Hero {
         let py = cy + Math.sin(angle) * radius;
         px = Math.max(0, Math.min(w, px));
         py = Math.max(0, Math.min(h, py));
-        return { x: px, y: py };
+        const pt = { x: px, y: py };
+        const valid = this.isPointReachable(pt, game);
+        if (valid) return pt;
+        return { x: cx + Utils.rand(-50, 50), y: cy + Utils.rand(30, 80) };
+    }
+    isPointReachable(pt, game) {
+        const obstacles = game.getObstacles();
+        for (const o of obstacles) {
+            if (pt.x >= o.x1 && pt.x <= o.x2 && pt.y >= o.y1 && pt.y <= o.y2) return false;
+        }
+        return true;
     }
 
     behaviorExplore(dt, game) {
@@ -208,8 +221,10 @@ export class Hero {
         const beforeX = this.x, beforeY = this.y;
         this.moveTowards(this.exploreTarget.x, this.exploreTarget.y, dt, game);
         const moved = Utils.dist(beforeX, beforeY, this.x, this.y);
-        if (moved < 1) { this.stuckTimer += dt; } else { this.stuckTimer = 0; }
-        if (this.stuckTimer > 1.2 && d > 25) {
+        if (moved < 1) { this.stuckTimer += dt; } else { this.stuckTimer = 0; this.stuckAttempts = 0; }
+        if (this.stuckTimer > 2.0 && d > 25) {
+            this.stuckAttempts = (this.stuckAttempts || 0) + 1;
+            if (this.stuckAttempts > 3) { this.state = 'DECISION'; this.stuckAttempts = 0; this.stuckTimer = 0; return; }
             this.exploreTarget = this.getExplorePoint(game);
             this.stuckTimer = 0;
         }
@@ -227,13 +242,18 @@ export class Hero {
             .sort((a, b) => Utils.dist(this.x, this.y, a.x, a.y) - Utils.dist(this.x, this.y, b.x, b.y))[0];
         if (market) doors.push(game.getDoorPoint(market));
         if (nearestGuild) doors.push(game.getDoorPoint(nearestGuild));
+        if (doors.length === 0 && game.castle) {
+            const c = game.castle;
+            doors.push({ x: c.x - 50, y: c.y + 50 });
+            doors.push({ x: c.x + 50, y: c.y + 50 });
+        }
         this.patrolRoute = doors;
         this.patrolIdx = 0;
         this.patrolTimer = 10.0;
     }
 
     behaviorPatrol(dt, game) {
-        if (!this.patrolRoute || this.patrolRoute.length === 0) { this.state = 'DECISION'; return; }
+        if (!this.patrolRoute || this.patrolRoute.length === 0) { this.setupPatrolRoute(game); if (!this.patrolRoute || this.patrolRoute.length === 0) { this.state = 'DECISION'; return; } }
         const tgt = this.patrolRoute[this.patrolIdx];
         const d = Utils.dist(this.x, this.y, tgt.x, tgt.y);
         if (d < 20) {
@@ -243,10 +263,12 @@ export class Hero {
             const beforeX = this.x, beforeY = this.y;
             this.moveTowards(tgt.x, tgt.y, dt, game);
             const moved = Utils.dist(beforeX, beforeY, this.x, this.y);
-            if (moved < 1) { this.stuckTimer += dt; } else { this.stuckTimer = 0; }
-            if (this.stuckTimer > 1.2 && d > 25) {
+            if (moved < 1) { this.stuckTimer += dt; } else { this.stuckTimer = 0; this.stuckAttempts = 0; }
+            if (this.stuckTimer > 2.0 && d > 25) {
                 // Skip ke waypoint berikutnya atau rekalkulasi rute
                 this.patrolIdx = Math.min(this.patrolIdx + 1, this.patrolRoute.length - 1);
+                this.stuckAttempts = (this.stuckAttempts || 0) + 1;
+                if (this.stuckAttempts > 3) { this.state = 'DECISION'; this.stuckAttempts = 0; return; }
                 this.stuckTimer = 0;
             }
         }
@@ -275,6 +297,14 @@ export class Hero {
             this.state = 'DECISION';
             this.target = null;
             game.entities.push(new Particle(this.x, this.y - 30, "Ready!", "lime"));
+        }
+        if (this.isInsideBuilding && this.buildingTimeout > 0) {
+            this.buildingTimeout -= dt;
+            if (this.buildingTimeout <= 0) {
+                if (this.target && this.target.exit) this.target.exit(this);
+                this.state = 'DECISION';
+                this.target = null;
+            }
         }
     }
 
@@ -584,16 +614,18 @@ export class Hero {
         if (!this.target.constructed) { this.state = 'DECISION'; return; }
         if (this.visible && dist < 18) {
             if (this.target.enter) {
+                this.shopTimer = 3.0;
+                this.buildingTimeout = 10.0;
                 this.target.enter(this);
-                if (this.shopTimer <= 0) this.shopTimer = 3.0;
             }
         } else if (this.visible) {
             this.moveTowards(door.x, door.y, dt, game);
         }
 
-        if (!this.visible && this.shopTimer > 0) {
-            this.shopTimer -= dt;
-            if (this.shopTimer <= 0) {
+        if (!this.visible && this.isInsideBuilding && this.state === 'SHOP') {
+            if (this.shopTimer > 0) this.shopTimer -= dt;
+            if (this.buildingTimeout > 0) this.buildingTimeout -= dt;
+            if (this.shopTimer <= 0 || this.buildingTimeout <= 0) {
                 this.lastShopTime = game.gameTime;
                 if (this.target && this.target.exit) this.target.exit(this);
                 this.state = 'DECISION';

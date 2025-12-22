@@ -90,7 +90,10 @@ export class EconomicBuilding {
             this.visitors.push(hero);
             hero.visible = false;
             hero.inBuilding = this;
+            hero.isInsideBuilding = true;
             hero.x = -10000; hero.y = -10000;
+            if (hero.state === 'SHOP') hero.buildingTimeout = 10.0;
+            else if (hero.state === 'RETREAT') hero.buildingTimeout = 12.0;
 
             // NEW: If this is a Market, attempt to sell potions
         if (this.type === 'MARKET') {
@@ -105,6 +108,8 @@ export class EconomicBuilding {
             this.visitors.splice(idx, 1);
             hero.visible = true;
             hero.inBuilding = null;
+            hero.isInsideBuilding = false;
+            hero.buildingTimeout = 0;
             hero.x = this.x;
             hero.y = this.y + (this.height / 2) + 15; // Spawn at feet
         }
