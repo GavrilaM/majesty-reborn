@@ -97,6 +97,13 @@ export class Hero {
         if (this.hp <= 0) { this.remove = true; return; }
 
         if (!this.visible) {
+            // Safety: ensure hero is actually inside a building when invisible
+            if ((this.state === 'SHOP_INSIDE' || this.state === 'RESTING_INSIDE') && (!this.isInsideBuilding || !this.inBuilding)) {
+                this.visible = true;
+                this.state = 'DECISION';
+                this.target = null;
+                return;
+            }
             if (this.state === 'SHOP_INSIDE') { this.behaviorShopInside(dt, game); return; }
             if (this.state === 'RESTING_INSIDE') { this.behaviorRestingInside(dt, game); return; }
             return;
@@ -122,6 +129,7 @@ export class Hero {
             if (this.reactionTimer > 0) return;
             if (this.nextState) { this.state = this.nextState; this.target = this.nextTarget; this.nextState = null; this.nextTarget = null; }
         }
+        if (this.state !== 'FIGHT') { this.isEngaged = false; this.engagedLockTimer = 0; }
 
         const retreatPercent = this.stats.derived.retreatThreshold / this.personality.brave;
         const retreatHP = this.maxHp * Utils.clamp(retreatPercent, 0.1, 0.8);
@@ -290,15 +298,15 @@ export class Hero {
         if (this.patrolTimer <= 0) { this.state = 'DECISION'; }
     }
     findHome(game) {
-        let best = game.castle;
-        let minDist = Utils.dist(this.x, this.y, best.x, best.y);
+        let best = null;
+        let minDist = Infinity;
         game.entities.forEach(e => {
-            if (e.constructor.name === 'EconomicBuilding' && (e.type === 'GUILD' || e.type === 'CASTLE')) {
+            if ((e.constructor.name === 'EconomicBuilding') && !e.remove && e.constructed && e.hp > 0) {
                 const d = Utils.dist(this.x, this.y, e.x, e.y);
                 if (d < minDist) { minDist = d; best = e; }
             }
         });
-        return best;
+        return best || game.castle;
     }
 
     behaviorResting(dt, game) {
@@ -1055,8 +1063,8 @@ export class Hero {
 
     integrate(dt, game) {
         const maxSpeed = CLASS_CONFIG[this.type].baseSpeed * this.stats.derived.moveSpeedMultiplier * (this.skillActive?.speedMult || 1);
-        // HARD STOP when engaged in combat
-        if (this.isEngaged) {
+        // HARD STOP hanya saat sedang FIGHT
+        if (this.isEngaged && this.state === 'FIGHT') {
             this.vel.x = 0; this.vel.y = 0;
             this.acc.x = 0; this.acc.y = 0;
             return;

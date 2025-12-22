@@ -10,6 +10,7 @@ export class Monster {
         this.archetype = archetypeKey;
 
         const config = MONSTER_ARCHETYPES[archetypeKey];
+        this.name = config.name || archetypeKey;
         this.hp = config.hp;
         this.maxHp = config.hp;
         this.damage = config.damage;
@@ -104,10 +105,8 @@ export class Monster {
                 this.aggroTimer = 0;
             } else {
                 // Chase the attacker (Hero or Tower) who damaged us
-                // Aggro overrides siege lock
+                // Aggro overrides active target but keep siegeTarget to return later
                 this.target = this.aggroTarget;
-                this.siegeTarget = null;
-                this.siegeLockTimer = 0;
             }
         }
 
@@ -338,6 +337,7 @@ export class Monster {
     }
 
     maintainSpace(entities, dt) {
+        this.moveBlocked = false;
         // Override: jika sangat dekat pintu target gedung, matikan repulsi untuk memastikan mendekat
         if (this.target && this.target.constructor.name === 'EconomicBuilding') {
             const doorX = this.target.x;

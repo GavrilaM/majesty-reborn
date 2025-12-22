@@ -308,7 +308,7 @@ export class UIManager {
         if (!m) return;
 
         const nameEl = document.getElementById('mon-name');
-        if (nameEl) nameEl.innerText = m.archetype || "Monster";
+        if (nameEl) nameEl.innerText = m.name || m.archetype || "Monster";
         const typeEl = document.getElementById('mon-type');
         if (typeEl) typeEl.innerText = 'Enemy';
 
