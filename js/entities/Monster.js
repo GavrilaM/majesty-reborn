@@ -44,6 +44,7 @@ export class Monster {
         this.blockedSide = 0;
         this.prevX = x;
         this.prevY = y;
+        this.walkPhase = 0;
 
         // AGGRO SYSTEM
         this.aggroTarget = null; // Hero or Tower who damaged us (for retaliation)
@@ -266,7 +267,8 @@ export class Monster {
                 if (this.blockedTimer <= 0) this.blockedSide = 0;
             }
             const desired = { x: blendDir.x * desiredSpeed, y: blendDir.y * desiredSpeed };
-            const steer = { x: desired.x - this.vel.x, y: desired.y - this.vel.y };
+            const smooth = Utils.lerpVec(this.vel.x, this.vel.y, desired.x, desired.y, 0.2);
+            const steer = { x: smooth.x - this.vel.x, y: smooth.y - this.vel.y };
             const limited = Utils.limitVec(steer.x, steer.y, this.speed);
             this.acc.x += limited.x; this.acc.y += limited.y;
             this.isEngaged = false; this.engagedLockTimer = 0;
@@ -296,7 +298,8 @@ export class Monster {
                         this.target.takeDamage(this.damage, game, this);
                         this.attackCooldown = 1.5;
                         // Lunge
-                        const ang = Math.atan2(this.target.y - this.y, this.target.x - this.x);
+                        const tp = isBuilding && game.getDoorPoint ? game.getDoorPoint(this.target) : { x: this.target.x, y: this.target.y };
+                        const ang = Math.atan2(tp.y - this.y, tp.x - this.x);
                         this.lungeVec = { x: Math.cos(ang) * 4, y: Math.sin(ang) * 4 };
                         this.lungeTimer = 0.12;
                     } else {
@@ -372,7 +375,7 @@ export class Monster {
                 if (aheadDot > 0.6 && dist < minGap * 0.8) this.moveBlocked = true;
             }
             if (e.constructor.name === 'EconomicBuilding') {
-                if (this.target === e) return;
+                if (this.target === e || this.isEngaged) return;
                 const tx = this.target ? this.target.x : this.x;
                 const ty = this.target ? this.target.y : this.y;
                 const dir = Utils.normalize(tx - this.x, ty - this.y);
@@ -428,6 +431,7 @@ export class Monster {
         this.vel.x = limited.x; this.vel.y = limited.y;
         // Stop completely if velocity is negligible
         const velMag = Math.hypot(this.vel.x, this.vel.y);
+        this.walkPhase = (this.walkPhase || 0) + (velMag > 0.5 ? velMag * 0.05 : 0) * dt * 60;
         if (velMag < 0.02) { this.vel.x = 0; this.vel.y = 0; }
         this.x += this.vel.x * dt;
         this.y += this.vel.y * dt;
@@ -549,6 +553,8 @@ export class Monster {
     draw(ctx) {
         let ox = 0, oy = 0;
         if (this.lungeTimer > 0) { const t = this.lungeTimer / 0.12; ox = this.lungeVec.x * t; oy = this.lungeVec.y * t; }
+        const vm = Math.hypot(this.vel.x, this.vel.y);
+        if (vm > 0.5) { oy += Math.sin((this.walkPhase || 0)) * 1.2; }
         Utils.drawSprite(ctx, 'monster', this.x + ox, this.y + oy, this.radius * 2, this.color);
         if (this.flashTimer > 0) { ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(this.x, this.y, this.radius + 5, 0, Math.PI * 2); ctx.stroke(); }
         ctx.fillStyle = 'red';

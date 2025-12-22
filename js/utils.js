@@ -10,6 +10,9 @@ export const Utils = {
     mul: (x, y, s) => ({ x: x * s, y: y * s }),
     add: (ax, ay, bx, by) => ({ x: ax + bx, y: ay + by }),
     lerp: (a, b, t) => a + (b - a) * t,
+    lerpVec: (ax, ay, bx, by, t) => {
+        return { x: ax + (bx - ax) * t, y: ay + (by - ay) * t };
+    },
     limitVec: (x, y, max) => {
         const len = Math.hypot(x, y);
         if (len <= max || len === 0) return { x, y };

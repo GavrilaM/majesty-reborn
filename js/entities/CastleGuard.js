@@ -12,7 +12,7 @@ export class CastleGuard {
         this.hp = 140;
         this.maxHp = 140;
         this.damage = 12;
-        this.speed = 50;
+        this.speed = 62;
         this.vel = { x: 0, y: 0 };
         this.acc = { x: 0, y: 0 };
         this.dodgeChance = 0.06;
@@ -24,6 +24,7 @@ export class CastleGuard {
         this.lockTimer = 0;
         this.visible = true;
         this.remove = false;
+        this.walkPhase = 0;
     }
 
     update(dt, game) {
@@ -100,15 +101,17 @@ export class CastleGuard {
             desiredSpeed = this.speed;
         }
         const desired = { x: dir.x * desiredSpeed, y: dir.y * desiredSpeed };
-        const steer = { x: desired.x - this.vel.x, y: desired.y - this.vel.y };
+        const smooth = Utils.lerpVec(this.vel.x, this.vel.y, desired.x, desired.y, 0.15);
+        const steer = { x: smooth.x - this.vel.x, y: smooth.y - this.vel.y };
         const limited = Utils.limitVec(steer.x, steer.y, this.speed * 3);
         this.acc.x += limited.x; this.acc.y += limited.y;
     }
 
     draw(ctx) {
         if (!this.visible) return;
-        // Body like hero
-        Utils.drawSprite(ctx, 'hero', this.x, this.y, this.radius * 2, this.color);
+        const vm = Math.hypot(this.vel.x, this.vel.y);
+        const oy = vm > 0.5 ? Math.sin(this.walkPhase || 0) * 1.2 : 0;
+        Utils.drawSprite(ctx, 'hero', this.x, this.y + oy, this.radius * 2, this.color);
         // HP bar
         ctx.fillStyle = 'red';
         ctx.fillRect(this.x - 10, this.y - 15, 20, 3);
@@ -144,6 +147,7 @@ export class CastleGuard {
         const limited = Utils.limitVec(this.vel.x, this.vel.y, this.speed);
         this.vel.x = limited.x; this.vel.y = limited.y;
         const velMag = Math.hypot(this.vel.x, this.vel.y);
+        this.walkPhase = this.walkPhase + (velMag > 0.5 ? velMag * 0.05 : 0) * dt * 60;
         if (velMag < 0.02) { this.vel.x = 0; this.vel.y = 0; }
         this.x += this.vel.x * dt;
         this.y += this.vel.y * dt;

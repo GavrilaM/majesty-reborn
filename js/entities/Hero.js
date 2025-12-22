@@ -83,13 +83,14 @@ export class Hero {
         this.buildingTimeout = 0;
         this.stuckAttempts = 0;
         this.doorApproachTimer = 0;
+        this.walkPhase = 0;
     }
 
     update(dt, game) {
-        // Fix: Safety check for NaN coordinates
+        // Safety check for NaN coordinates
         if (isNaN(this.x) || isNaN(this.y)) {
-            this.x = game.castle.x;
-            this.y = game.castle.y + 60;
+            this.x = this.prevX || game.castle.x;
+            this.y = this.prevY || (game.castle.y + 60);
             this.vel = { x: 0, y: 0 };
             this.acc = { x: 0, y: 0 };
         }
@@ -745,6 +746,14 @@ export class Hero {
     behaviorShopInside(dt, game) {
         if (this.shopTimer > 0) this.shopTimer -= dt;
         if (this.buildingTimeout > 0) this.buildingTimeout -= dt;
+        // Allow repeated purchase attempts while inside Market
+        if (this.inBuilding && this.inBuilding.type === 'MARKET') {
+            this.shopPurchaseCooldown = (this.shopPurchaseCooldown || 0) - dt;
+            if (this.shopPurchaseCooldown <= 0) {
+                this.shopPurchaseCooldown = 0.8;
+                if (this.inBuilding.attemptPotionSale) this.inBuilding.attemptPotionSale(this);
+            }
+        }
         if (this.shopTimer <= 0 || this.buildingTimeout <= 0) {
             this.lastShopTime = game.gameTime;
             if (this.target && this.target.exit) this.target.exit(this);
@@ -927,7 +936,8 @@ export class Hero {
         const minCruise = (dist > stopRadius) ? maxSpeed * 0.25 : 0;
         const finalSpeed = Math.max(desiredSpeed, minCruise);
         const desired = { x: blendDir.x * finalSpeed, y: blendDir.y * finalSpeed };
-        const steer = { x: desired.x - this.vel.x, y: desired.y - this.vel.y };
+        const smooth = Utils.lerpVec(this.vel.x, this.vel.y, desired.x, desired.y, 0.15);
+        const steer = { x: smooth.x - this.vel.x, y: smooth.y - this.vel.y };
         const steerStrength = maxSpeed * 4;
         const limited = Utils.limitVec(steer.x, steer.y, steerStrength);
         this.acc.x += limited.x; this.acc.y += limited.y;
@@ -1082,9 +1092,14 @@ export class Hero {
         this.vel.y = limited.y;
         // Stop completely if velocity is negligible
         const velMag = Math.hypot(this.vel.x, this.vel.y);
+        this.walkPhase = (this.walkPhase || 0) + (velMag > 0.5 ? velMag * 0.05 : 0) * dt * 60;
         if (velMag < 0.02) { this.vel.x = 0; this.vel.y = 0; }
         this.x += this.vel.x * dt;
         this.y += this.vel.y * dt;
+        if (Number.isFinite(this.x) && Number.isFinite(this.y)) {
+            this.prevX = this.x;
+            this.prevY = this.y;
+        }
         this.acc.x = 0;
         this.acc.y = 0;
     }
@@ -1103,6 +1118,8 @@ export class Hero {
 
         let ox = 0, oy = 0;
         if (this.lungeTimer > 0) { const t = this.lungeTimer / 0.12; ox = this.lungeVec.x * t; oy = this.lungeVec.y * t; }
+        const vm = Math.hypot(this.vel.x, this.vel.y);
+        if (vm > 0.5) { oy += Math.sin((this.walkPhase || 0)) * 1.5; }
         Utils.drawSprite(ctx, 'hero', this.x + ox, this.y + oy, 20 + (this.level), this.color);
         // HP bar
         ctx.fillStyle = 'red'; ctx.fillRect(this.x - 10, this.y - 25, 20, 4);
