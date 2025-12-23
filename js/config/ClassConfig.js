@@ -25,7 +25,7 @@ export const MONSTER_ARCHETYPES = {
         name: "Goblin",
         hp: 50,
         damage: 8,
-        speed: 45,
+        speed: 65, // Faster than warriors (50)
         xpReward: 10,
         goldDrop: 15,
         description: "Quick scavenger that harasses and retreats.",

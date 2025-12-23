@@ -90,7 +90,29 @@ export class Monster {
             this.siegeLockTimer -= dt;
         }
 
-        this.maintainSpace(game.entities, dt);
+        // Update engaged lock timer
+        if (this.engagedLockTimer > 0) {
+            this.engagedLockTimer -= dt;
+        }
+
+        // EARLY TARGET VALIDATION - Clear dead/removed targets immediately
+        if (this.target) {
+            const isUnit = this.target.constructor.name === 'Hero' ||
+                this.target.constructor.name === 'Worker' ||
+                this.target.constructor.name === 'CastleGuard';
+            const isBuilding = this.target.constructor.name === 'EconomicBuilding' ||
+                this.target.constructor.name === 'Building';
+
+            const targetDead = this.target.remove || this.target.hp <= 0 ||
+                (isUnit && !this.target.visible);
+
+            if (targetDead) {
+                this.target = null;
+                this.isEngaged = false;
+                this.preparedAttack = false;
+                this.engagedLockTimer = 0;
+            }
+        }
 
         // === AGGRO SYSTEM: 3-STEP PRIORITY ===
 
@@ -199,6 +221,9 @@ export class Monster {
             }
         }
 
+        // Maintain space AFTER target is determined (prevents stale direction)
+        this.maintainSpace(game.entities, dt);
+
         // MOVE / ATTACK (only if target is valid)
         if (!this.target) {
             // No valid target - stand still
@@ -214,7 +239,7 @@ export class Monster {
 
         const distToTarget = Utils.dist(this.x, this.y, this.target.x, this.target.y);
         const attackRange = this.radius + 20;
-        
+
         // Fix: For large buildings, distance to center is misleading. 
         // Use distance to edge/door if target is a building.
         let effectiveRange = attackRange;
@@ -227,16 +252,26 @@ export class Monster {
                 targetPoint = game.getDoorPoint(this.target);
             }
             // Increase range slightly for buildings to account for size
-            effectiveRange = attackRange + 10; 
-        }
-
-        if (game && game.canvas) {
-            targetPoint.x = Math.max(0, Math.min(game.canvas.width, targetPoint.x));
-            targetPoint.y = Math.max(0, Math.min(game.canvas.height, targetPoint.y));
+            effectiveRange = attackRange + 10;
+            // Only clamp door points to canvas for buildings
+            if (game && game.canvas) {
+                targetPoint.x = Math.max(0, Math.min(game.canvas.width, targetPoint.x));
+                targetPoint.y = Math.max(0, Math.min(game.canvas.height, targetPoint.y));
+            }
+        } else {
+            // For unit targets, add their radius to our effective range
+            const targetRadius = this.target.radius || 15;
+            effectiveRange = attackRange + targetRadius;
         }
         const distToPoint = Utils.dist(this.x, this.y, targetPoint.x, targetPoint.y);
 
-        if (distToPoint > effectiveRange) {
+        // Hysteresis: once engaged, use a slightly larger "stay engaged" range to prevent oscillation
+        const engageBuffer = this.isEngaged ? 8 : 0;
+
+        // Only disengage if lock timer expired AND we're outside the buffer zone
+        const shouldDisengage = distToPoint > (effectiveRange + engageBuffer) && this.engagedLockTimer <= 0;
+
+        if (shouldDisengage) {
             // Move towards target
             const dx = targetPoint.x - this.x, dy = targetPoint.y - this.y;
             const dist = Math.hypot(dx, dy);
@@ -271,7 +306,7 @@ export class Monster {
             const steer = { x: smooth.x - this.vel.x, y: smooth.y - this.vel.y };
             const limited = Utils.limitVec(steer.x, steer.y, this.speed);
             this.acc.x += limited.x; this.acc.y += limited.y;
-            this.isEngaged = false; this.engagedLockTimer = 0;
+            this.isEngaged = false;
             const moved = Math.hypot(this.x - this.prevX, this.y - this.prevY);
             if (moved > 5) this.preparedAttack = false;
         }
@@ -287,13 +322,25 @@ export class Monster {
                     const isHero = this.target.constructor.name === 'Hero';
                     const isWorker = this.target.constructor.name === 'Worker';
                     const isGuard = this.target.constructor.name === 'CastleGuard';
-                    const isValidUnit = (isHero && this.target.visible) || isWorker || isGuard;
+                    // FIX: Check HP and visibility for ALL unit types
+                    const isValidUnit = (isHero && this.target.visible && this.target.hp > 0) ||
+                        (isWorker && this.target.hp > 0) ||
+                        (isGuard && this.target.hp > 0);
                     const isBuilding = this.target.constructor.name === 'EconomicBuilding' ||
                         this.target.constructor.name === 'Building';
                     const isValidBuilding = isBuilding && this.target.hp > 0;
 
+                    // FIX: Re-check distance before attacking (target may have moved)
+                    // Use same range calculation as movement check for consistency
+                    const currentDist = Utils.dist(this.x, this.y, this.target.x, this.target.y);
+                    // For units: monster radius + target radius + buffer
+                    // For buildings: effectiveRange already includes building offset
+                    const targetRadius = (isBuilding ? 0 : (this.target.radius || 15));
+                    const maxAttackDist = this.radius + targetRadius + 25;
+                    const targetInRange = currentDist <= maxAttackDist;
+
                     if (this.target && this.target.takeDamage &&
-                        !this.target.remove &&
+                        !this.target.remove && targetInRange &&
                         ((isValidUnit && this.target.hp > 0) || isValidBuilding)) {
                         this.target.takeDamage(this.damage, game, this);
                         this.attackCooldown = 1.5;
@@ -303,20 +350,22 @@ export class Monster {
                         this.lungeVec = { x: Math.cos(ang) * 4, y: Math.sin(ang) * 4 };
                         this.lungeTimer = 0.12;
                     } else {
-                        // Target became invalid during attack, drop it
+                        // Target became invalid during attack, drop it and reset state
                         this.target = null;
+                        this.isEngaged = false;
                     }
                     this.preparedAttack = false;
                 }
             }
 
-            this.isEngaged = true; if (this.engagedLockTimer <= 0) this.engagedLockTimer = 1.0;
+            this.isEngaged = true;
+            this.engagedLockTimer = 0.5; // Lock engagement for 0.5 seconds to prevent jittering
             this.vel.x = 0; this.vel.y = 0;
             this.acc.x = 0; this.acc.y = 0;
         }
         if (this.targetStickTimer > 0) this.targetStickTimer -= dt;
     }
-    
+
     getDistanceToTarget(game) {
         if (!this.target) return Infinity;
         const isBuilding = this.target.constructor.name === 'EconomicBuilding' || this.target.constructor.name === 'Building';
@@ -326,7 +375,13 @@ export class Monster {
         }
         return Utils.dist(this.x, this.y, this.target.x, this.target.y);
     }
-    
+
+    // Simple distance estimate for maintainSpace (doesn't need game reference)
+    getDistanceToTargetEstimate() {
+        if (!this.target) return Infinity;
+        return Utils.dist(this.x, this.y, this.target.x, this.target.y);
+    }
+
     canAcceptMeleeAttacker() {
         return this.engagedHeroes.size < this.maxMeleeSlots;
     }
@@ -362,8 +417,10 @@ export class Monster {
                     const nx = (this.x - e.x) / dist;
                     const ny = (this.y - e.y) / dist;
                     const overlap = (minGap - dist);
-                    const pushStrength = overlap * 0.5;
-                    const scale = this.isEngaged ? 0.0 : 0.3;
+                    // Reduce separation when close to target to prevent oscillation
+                    const approachingTarget = this.target && this.getDistanceToTargetEstimate &&
+                        this.getDistanceToTargetEstimate() < 50;
+                    const scale = this.isEngaged ? 0.0 : (approachingTarget ? 0.1 : 0.25);
                     sepX += nx * overlap * scale;
                     sepY += ny * overlap * scale;
                 }
@@ -371,7 +428,7 @@ export class Monster {
                 const fy = this.target ? this.target.y : this.y;
                 const dir = Utils.normalize(fx - this.x, fy - this.y);
                 const ax = e.x - this.x, ay = e.y - this.y;
-                const aheadDot = Utils.dot(dir.x, dir.y, (ax / ((dist||1))), (ay / ((dist||1))));
+                const aheadDot = Utils.dot(dir.x, dir.y, (ax / ((dist || 1))), (ay / ((dist || 1))));
                 if (aheadDot > 0.6 && dist < minGap * 0.8) this.moveBlocked = true;
             }
             if (e.constructor.name === 'EconomicBuilding') {

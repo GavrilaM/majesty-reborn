@@ -44,28 +44,30 @@ export class Worker {
 
         if (!this.target || this.target.remove) {
             const b = this.findWorkTarget(game);
-            if (b) { 
+            if (b) {
                 // If resting inside castle, exit
                 if (!this.visible && this.restingBuilding && this.restingBuilding.exit) {
                     this.restingBuilding.exit(this);
                     this.restingBuilding = null;
                 }
-                this.target = b; this.state = 'MOVE'; 
-            } else { 
+                this.target = b; this.state = 'MOVE';
+            } else {
                 this.state = 'IDLE';
             }
         }
 
         if (this.state === 'MOVE') {
-            const door = { x: this.target.x, y: this.target.y + (this.target.height/2) - 5 };
-            const d = Utils.dist(this.x, this.y, door.x, door.y);
-            if (d < 18) {
+            // Work from building center, not door - much faster
+            const workPoint = { x: this.target.x, y: this.target.y };
+            const d = Utils.dist(this.x, this.y, workPoint.x, workPoint.y);
+            // Increased work range from 18 to 60 - worker can work from distance
+            if (d < 60) {
                 this.state = this.target.constructed ? 'REPAIR' : 'BUILD';
                 // Stop movement when starting work
                 this.vel.x = 0; this.vel.y = 0;
                 this.acc.x = 0; this.acc.y = 0;
             } else {
-                this.moveTowards(door.x, door.y, dt);
+                this.moveTowards(workPoint.x, workPoint.y, dt);
             }
         } else if (this.state === 'BUILD') {
             if (this.target.constructed) { this.state = 'IDLE'; this.target = null; return; }
@@ -79,7 +81,7 @@ export class Worker {
             // Return inside Castle to rest if nothing to do
             const castle = game.castle;
             if (castle && castle.constructed) {
-                const door = { x: castle.x, y: castle.y + (castle.height/2) - 5 };
+                const door = { x: castle.x, y: castle.y + (castle.height / 2) - 5 };
                 const d = Utils.dist(this.x, this.y, door.x, door.y);
                 if (d < 18) {
                     if (castle.enter) { castle.enter(this); this.restingBuilding = castle; }
@@ -123,15 +125,17 @@ export class Worker {
         const dx = tx - this.x, dy = ty - this.y;
         const dist = Math.hypot(dx, dy);
         const dir = dist > 0 ? { x: dx / dist, y: dy / dist } : { x: 0, y: 0 };
-        const arriveRadius = 50;
+        // Faster arrival - reduced slowdown zone
+        const arriveRadius = 20;
         const stopRadius = 5;
         let desiredSpeed;
         if (dist < stopRadius) {
             desiredSpeed = 0;
             this.vel.x = 0; this.vel.y = 0;
         } else if (dist < arriveRadius) {
+            // Linear slowdown instead of quadratic for faster approach
             const t = (dist - stopRadius) / (arriveRadius - stopRadius);
-            desiredSpeed = this.speed * t * t;
+            desiredSpeed = this.speed * t;
         } else {
             desiredSpeed = this.speed;
         }

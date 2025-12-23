@@ -131,10 +131,10 @@ class Game {
         return this.entities
             .filter(e => e instanceof EconomicBuilding || e.constructor.name === 'EconomicBuilding')
             .map(b => ({
-                x1: b.x - b.width/2 - margin,
-                y1: b.y - b.height/2 - margin,
-                x2: b.x + b.width/2 + margin,
-                y2: b.y + b.height/2 + margin
+                x1: b.x - b.width / 2 - margin,
+                y1: b.y - b.height / 2 - margin,
+                x2: b.x + b.width / 2 + margin,
+                y2: b.y + b.height / 2 + margin
             }));
     }
 
@@ -150,8 +150,8 @@ class Game {
         const ty = Math.floor((targetY - oy) / cell);
         const obstacles = this.getObstacles();
         const blocked = (cx, cy) => {
-            const x = ox + cx * cell + cell/2;
-            const y = oy + cy * cell + cell/2;
+            const x = ox + cx * cell + cell / 2;
+            const y = oy + cy * cell + cell / 2;
             for (const o of obstacles) {
                 if (x >= o.x1 && x <= o.x2 && y >= o.y1 && y <= o.y2) return true;
             }
@@ -159,8 +159,8 @@ class Game {
         };
         // Penalty near obstacle shells, with corridor near target door
         const penalty = (cx, cy) => {
-            const x = ox + cx * cell + cell/2;
-            const y = oy + cy * cell + cell/2;
+            const x = ox + cx * cell + cell / 2;
+            const y = oy + cy * cell + cell / 2;
             const doorDist = Math.hypot(x - targetX, y - targetY);
             if (doorDist < 24) return 0;
             let pen = 0;
@@ -174,7 +174,7 @@ class Game {
         };
         const q = [];
         if (inBounds(tx, ty)) { dist[idx(tx, ty)] = 0; q.push({ cx: tx, cy: ty }); }
-        const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+        const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
         while (q.length) {
             const { cx, cy } = q.shift();
             const d0 = dist[idx(cx, cy)];
@@ -193,10 +193,10 @@ class Game {
             for (let cx = 0; cx < cols; cx++) {
                 const i = idx(cx, cy);
                 if (dist[i] === Infinity) { vecX[i] = 0; vecY[i] = 0; continue; }
-                const left = inBounds(cx-1, cy) ? dist[idx(cx-1, cy)] : dist[i];
-                const right = inBounds(cx+1, cy) ? dist[idx(cx+1, cy)] : dist[i];
-                const up = inBounds(cx, cy-1) ? dist[idx(cx, cy-1)] : dist[i];
-                const down = inBounds(cx, cy+1) ? dist[idx(cx, cy+1)] : dist[i];
+                const left = inBounds(cx - 1, cy) ? dist[idx(cx - 1, cy)] : dist[i];
+                const right = inBounds(cx + 1, cy) ? dist[idx(cx + 1, cy)] : dist[i];
+                const up = inBounds(cx, cy - 1) ? dist[idx(cx, cy - 1)] : dist[i];
+                const down = inBounds(cx, cy + 1) ? dist[idx(cx, cy + 1)] : dist[i];
                 let gx = left - right;
                 let gy = up - down;
                 const norm = Math.hypot(gx, gy) || 1;
@@ -342,14 +342,14 @@ class Game {
         this.entities = this.entities.filter(e => !e.remove);
         this.ui.update(dt);
     }
-    
+
     resolveCollisions() {
         const units = this.entities.filter(e =>
             !e.remove &&
             (e.constructor.name === 'Hero' ||
-             e.constructor.name === 'Monster' ||
-             e.constructor.name === 'Worker' ||
-             e.constructor.name === 'CastleGuard') &&
+                e.constructor.name === 'Monster' ||
+                e.constructor.name === 'Worker' ||
+                e.constructor.name === 'CastleGuard') &&
             e.visible !== false
         );
         for (let pass = 0; pass < 2; pass++) {
@@ -368,7 +368,9 @@ class Game {
                     if (dist < minDist && dist > 0) {
                         const overlap = minDist - dist;
                         const nx = dx / dist, ny = dy / dist;
-                        const pushAmount = overlap * 0.35;
+                        // Reduce push force if either unit is engaged to prevent jittering
+                        const weakPush = (a.isEngaged || b.isEngaged);
+                        const pushAmount = overlap * (weakPush ? 0.15 : 0.35);
                         if (!a.isEngaged) { a.x -= nx * pushAmount; a.y -= ny * pushAmount; }
                         if (!b.isEngaged) { b.x += nx * pushAmount; b.y += ny * pushAmount; }
                     }
@@ -412,7 +414,7 @@ class Game {
 
         this.entities.forEach(e => e.draw(this.ctx));
         this.builder.drawPreview(this.ctx, this.mouseX, this.mouseY);
-        
+
         if (this.debugMode) {
             const ctx = this.ctx;
             ctx.save();

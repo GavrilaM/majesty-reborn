@@ -98,13 +98,30 @@ export class Hero {
         if (this.hp <= 0) { this.remove = true; return; }
 
         if (!this.visible) {
-            // Safety: ensure hero is actually inside a building when invisible
-            if ((this.state === 'SHOP_INSIDE' || this.state === 'RESTING_INSIDE') && (!this.isInsideBuilding || !this.inBuilding)) {
+            // CRITICAL FIX: If invisible but NOT properly inside a building, restore visibility
+            // This handles edge cases where hero becomes invisible without proper building entry
+            const validInvisibleStates = ['SHOP_INSIDE', 'RESTING_INSIDE'];
+            const shouldBeInvisible = validInvisibleStates.includes(this.state) && this.isInsideBuilding && this.inBuilding;
+
+            if (!shouldBeInvisible) {
+                // Hero is invisible but shouldn't be - restore them
                 this.visible = true;
+                this.isInsideBuilding = false;
+                this.inBuilding = null;
+                // Restore position if at invalid coordinates
+                if (this.x < 0 || this.y < 0 || isNaN(this.x) || isNaN(this.y)) {
+                    this.x = game.castle.x + Utils.rand(-30, 30);
+                    this.y = game.castle.y + 60;
+                    this.vel = { x: 0, y: 0 };
+                    this.acc = { x: 0, y: 0 };
+                }
                 this.state = 'DECISION';
                 this.target = null;
+                game.entities.push(new Particle(this.x, this.y - 30, "!", "yellow"));
                 return;
             }
+
+            // Handle valid invisible states
             if (this.state === 'SHOP_INSIDE') { this.behaviorShopInside(dt, game); return; }
             if (this.state === 'RESTING_INSIDE') { this.behaviorRestingInside(dt, game); return; }
             return;
@@ -406,6 +423,16 @@ export class Hero {
     }
 
     behaviorDecision(dt, game) {
+        // FIX: Safeguard - ensure hero is visible when in DECISION state
+        if (!this.visible && !this.isInsideBuilding) {
+            this.visible = true;
+            // Restore position if hero is at invalid location
+            if (this.x < 0 || this.y < 0 || isNaN(this.x) || isNaN(this.y)) {
+                this.x = game.castle.x + Utils.rand(-30, 30);
+                this.y = game.castle.y + 60;
+            }
+        }
+
         if (this.nextState) return;
         const range = this.stats.derived.perceptionRange;
         const nearbyMonsters = game.entities.filter(e => e.constructor.name === 'Monster' && Utils.dist(this.x, this.y, e.x, e.y) < range);
@@ -427,7 +454,7 @@ export class Hero {
             }
         }
 
-        
+
 
         // PERSONALITY: Find preferred target based on traits
         // Fix: Weigh distance more heavily to prevent "cross-map" targeting
@@ -551,10 +578,10 @@ export class Hero {
         return validTargets.sort((a, b) => {
             const distA = Utils.dist(this.x, this.y, a.x, a.y);
             const distB = Utils.dist(this.x, this.y, b.x, b.y);
-            
+
             // Base Score: Negative Distance (closer is better)
             // Weight distance heavily to prevent bad traffic
-            let scoreA = -distA * 2.0; 
+            let scoreA = -distA * 2.0;
             let scoreB = -distB * 2.0;
 
             // GREEDY: Bonus for Gold
@@ -620,12 +647,12 @@ export class Hero {
             this.isEngaged = false; this.engagedLockTimer = 0;
         } else {
             // In optimal range: Attack!
-            
+
             // Fix for Attack Loop:
             // 1. If cooldown is ready, start windup (if not already started)
             // 2. Wait for windup
             // 3. Attack
-            
+
             if (this.attackCooldown <= 0) {
                 if (!this.preparedAttack) {
                     // Start windup
@@ -649,9 +676,9 @@ export class Hero {
 
     behaviorKite(target, dt, game) {
         // STAMINA CHECK
-            // Cost decreases with AGI; minimum 10 per second
-            const kiteCostPerSec = Math.max(10, 25 - (this.stats.current.AGI * 0.5));
-            const kiteCost = kiteCostPerSec * dt;
+        // Cost decreases with AGI; minimum 10 per second
+        const kiteCostPerSec = Math.max(10, 25 - (this.stats.current.AGI * 0.5));
+        const kiteCost = kiteCostPerSec * dt;
         if (this.stamina >= kiteCost) {
 
             // Move AWAY from target
@@ -683,7 +710,7 @@ export class Hero {
             this.target = markets.sort((a, b) => Utils.dist(this.x, this.y, a.x, a.y) - Utils.dist(this.x, this.y, b.x, b.y))[0];
         }
 
-        const door = { x: this.target.x, y: this.target.y + (this.target.height/2) - 5 };
+        const door = { x: this.target.x, y: this.target.y + (this.target.height / 2) - 5 };
         const dist = Utils.dist(this.x, this.y, door.x, door.y);
 
         if (!this.target.constructed) { this.state = 'DECISION'; return; }
@@ -721,7 +748,7 @@ export class Hero {
 
     behaviorShopEntering(dt, game) {
         if (!this.target) { this.state = 'DECISION'; return; }
-        const door = { x: this.target.x, y: this.target.y + (this.target.height/2) - 5 };
+        const door = { x: this.target.x, y: this.target.y + (this.target.height / 2) - 5 };
         const dist = Utils.dist(this.x, this.y, door.x, door.y);
         this.doorApproachTimer += dt;
         if (dist < 25 || this.doorApproachTimer > 2.0) {
@@ -1022,8 +1049,8 @@ export class Hero {
                 const fy = (this.target ? this.target.y : (this.wanderTarget ? this.wanderTarget.y : this.y));
                 const dir = Utils.normalize(fx - this.x, fy - this.y);
                 const ax = e.x - this.x, ay = e.y - this.y;
-                const aheadDot = Utils.dot(dir.x, dir.y, (ax / ((dist||1))), (ay / ((dist||1))));
-                
+                const aheadDot = Utils.dot(dir.x, dir.y, (ax / ((dist || 1))), (ay / ((dist || 1))));
+
                 const travelState = this.state === 'SHOP' || this.state === 'RETREAT' || this.state === 'PATROL' || this.state === 'EXPLORE';
                 if (!travelState && aheadDot > 0.6 && dist < minGap * 0.8) this.moveBlocked = true;
             }
@@ -1107,8 +1134,18 @@ export class Hero {
     behaviorVictory(dt, game) {
         if (this.victoryTimer > 0) {
             this.victoryTimer -= dt;
-            if (this.victoryTimer <= 0) this.state = 'DECISION';
+            if (this.victoryTimer <= 0) {
+                // FIX: Ensure hero is visible when exiting victory state
+                if (!this.visible && !this.isInsideBuilding) {
+                    this.visible = true;
+                }
+                this.state = 'DECISION';
+            }
         } else {
+            // FIX: Ensure hero is visible when exiting victory state
+            if (!this.visible && !this.isInsideBuilding) {
+                this.visible = true;
+            }
             this.state = 'DECISION';
         }
     }
