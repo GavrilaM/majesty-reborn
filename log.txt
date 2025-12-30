@@ -1,0 +1,52 @@
+Error: Something went wrong.
+    at sx (solanaActionsContentScript.js:38:145570)
+    at async K6 (solanaActionsContentScript.js:1225:363)
+GameLogger.js:30 [4.7s] [VISIBILITY] Worker: INVISIBLE_ENTERED_BUILDING Object
+DebugLogger.js:14 [ENTER] Worker: ENTERING_BUILDING Object
+GameLogger.js:30 [4.8s] [VISIBILITY] Worker: VISIBLE_EXITED_BUILDING Object
+DebugLogger.js:14 [EXIT] Worker: EXITING_BUILDING Object
+GameLogger.js:30 [14.7s] [VISIBILITY] Worker: INVISIBLE_ENTERED_BUILDING {buildingType: 'CASTLE', buildingId: 'CASTLE-ll9hyy'}
+DebugLogger.js:14 [ENTER] Worker: ENTERING_BUILDING {buildingType: 'CASTLE', buildingId: 'CASTLE-ll9hyy'}
+GameLogger.js:30 [15.6s] [VISIBILITY] Worker: VISIBLE_EXITED_BUILDING {buildingType: 'CASTLE', newPosition: {…}}
+DebugLogger.js:14 [EXIT] Worker: EXITING_BUILDING {buildingType: 'CASTLE', newPosition: {…}}
+GameLogger.js:30 [26.9s] [VISIBILITY] Worker: INVISIBLE_ENTERED_BUILDING {buildingType: 'CASTLE', buildingId: 'CASTLE-ll9hyy'}
+DebugLogger.js:14 [ENTER] Worker: ENTERING_BUILDING {buildingType: 'CASTLE', buildingId: 'CASTLE-ll9hyy'}
+GameLogger.js:30 [71.0s] [DEATH] Goblin: MONSTER_KILLED {hp: -3.1999999999999993, target: 'Shadowmight'}
+GameLogger.js:30 [82.5s] [DEATH] Goblin: MONSTER_KILLED {hp: -3.1999999999999993, target: 'Shadowmight'}
+GameLogger.js:30 [101.6s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [102.5s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [103.2s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [103.4s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [103.7s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [104.0s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [104.2s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [104.5s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [104.7s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [105.0s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [106.1s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [106.3s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [106.6s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [106.8s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [107.1s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [107.3s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [107.5s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [107.8s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [108.7s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [109.7s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [110.0s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [110.2s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [110.5s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [110.7s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [111.0s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [111.2s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}building: "CASTLE"distToPoint: NaNeffectiveRange: 47[[Prototype]]: Object
+GameLogger.js:30 [111.5s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [111.7s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [112.5s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [112.7s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [113.0s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [113.2s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [113.5s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [113.8s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [114.0s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [115.0s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
+GameLogger.js:30 [116.4s] [COMBAT] Goblin: BUILDING_ATTACK_OUT_OF_RANGE {distToPoint: NaN, effectiveRange: 47, building: 'CASTLE'}
