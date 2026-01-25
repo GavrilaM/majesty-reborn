@@ -96,11 +96,17 @@ export class Worker {
         let best = null;
         let bestScore = -Infinity;
         for (const e of game.entities) {
-            if (e instanceof EconomicBuilding || e.constructor.name === 'EconomicBuilding') {
+            // FIX: Check for any building type by looking for 'constructed' property
+            // This includes EconomicBuilding, WarriorGuild, RangerGuild, etc.
+            const isBuilding = e.hasOwnProperty('constructed') && e.hasOwnProperty('maxHp');
+
+            if (isBuilding) {
                 if (!e.constructed) {
+                    // Prioritize unconstructed buildings (construction)
                     const s = 1000 - Utils.dist(this.x, this.y, e.x, e.y);
                     if (s > bestScore) { bestScore = s; best = e; }
                 } else if (e.hp < e.maxHp) {
+                    // Lower priority for damaged buildings (repair)
                     const s = 500 - Utils.dist(this.x, this.y, e.x, e.y);
                     if (s > bestScore) { bestScore = s; best = e; }
                 }

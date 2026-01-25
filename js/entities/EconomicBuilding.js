@@ -4,6 +4,7 @@ import { Particle } from './Particle.js';
 import { BUILDING_CONFIG } from '../config/BuildingConfig.js';
 import { ITEM_CONFIG } from '../config/ItemConfig.js';
 import { DebugLogger } from '../systems/DebugLogger.js';
+import { GameLogger } from '../systems/GameLogger.js';
 
 export class EconomicBuilding {
     constructor(x, y, type, game = null) {
@@ -90,6 +91,7 @@ export class EconomicBuilding {
         if (!this.visitors.includes(hero)) {
             this.visitors.push(hero);
             hero.visible = false;
+            GameLogger.log('VISIBILITY', hero, 'INVISIBLE_ENTERED_BUILDING', { buildingType: this.type, buildingId: this.id });
             hero.inBuilding = this;
             hero.isInsideBuilding = true;
             hero.x = -10000; hero.y = -10000;
@@ -97,9 +99,9 @@ export class EconomicBuilding {
             else if (hero.state === 'RETREAT') hero.buildingTimeout = 12.0;
 
             // NEW: If this is a Market, attempt to sell potions
-        if (this.type === 'MARKET') {
-            this.attemptPotionSale(hero);
-        }
+            if (this.type === 'MARKET') {
+                this.attemptPotionSale(hero);
+            }
         }
         DebugLogger.log('ENTER', hero.name, 'ENTERING_BUILDING', { buildingType: this.type, buildingId: this.id });
         return true;
@@ -110,6 +112,7 @@ export class EconomicBuilding {
         if (idx !== -1) {
             this.visitors.splice(idx, 1);
             hero.visible = true;
+            GameLogger.log('VISIBILITY', hero, 'VISIBLE_EXITED_BUILDING', { buildingType: this.type, newPosition: { x: hero.x, y: hero.y } });
             hero.inBuilding = null;
             hero.isInsideBuilding = false;
             hero.buildingTimeout = 0;
@@ -187,11 +190,12 @@ export class EconomicBuilding {
             return 1;
         }
 
-        // Smart heroes calculate based on HP deficit
+        // Smart heroes calculate based on HP deficit AND preparation
         if (hero.personality.smart > 0.7) {
             const hpMissing = hero.maxHp - hero.hp;
             const potionsNeeded = Math.ceil(hpMissing / 50); // 50 HP per potion
-            return Math.min(potionsNeeded, 2); // Cap at 2 (belt capacity)
+            // Fix: Smart heroes should always stock at least 1 potion for future battles
+            return Math.max(potionsNeeded, 1);
         }
 
         // Default: Buy 1 potion

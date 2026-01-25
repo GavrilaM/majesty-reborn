@@ -123,7 +123,9 @@ class Game {
     }
 
     getDoorPoint(building) {
-        return { x: building.x, y: building.y + (building.height / 2) - 5 };
+        // FIX: Handle buildings without height property (Castle uses width/height from canvas drawing)
+        const height = building.height || 80; // Default 80px if height undefined
+        return { x: building.x, y: building.y + (height / 2) - 5 };
     }
 
     getObstacles() {
@@ -197,8 +199,12 @@ class Game {
                 const right = inBounds(cx + 1, cy) ? dist[idx(cx + 1, cy)] : dist[i];
                 const up = inBounds(cx, cy - 1) ? dist[idx(cx, cy - 1)] : dist[i];
                 const down = inBounds(cx, cy + 1) ? dist[idx(cx, cy + 1)] : dist[i];
-                let gx = left - right;
-                let gy = up - down;
+                // FIX: Handle Infinity values to prevent NaN (Infinity - Infinity = NaN)
+                let gx = (isFinite(left) && isFinite(right)) ? (left - right) : 0;
+                let gy = (isFinite(up) && isFinite(down)) ? (up - down) : 0;
+                // Also check for NaN just to be safe
+                if (isNaN(gx)) gx = 0;
+                if (isNaN(gy)) gy = 0;
                 const norm = Math.hypot(gx, gy) || 1;
                 vecX[i] = gx / norm;
                 vecY[i] = gy / norm;
@@ -328,11 +334,24 @@ class Game {
         }
 
         if (this.castle.hp <= 0) { this.endGame(); return; }
-        // PACING: Reduced spawn rate (0.005 -> 0.002)
-        if (Math.random() < 0.002) {
+        // DEBUG: Reduced spawn rate and added initial delay for testing
+        // No monsters spawn in first 30 seconds to allow building/recruiting
+        if (this.gameTime > 30 && Math.random() < 0.002) {
             const x = Math.random() < 0.5 ? 0 : this.canvas.width;
             const y = Math.random() * this.canvas.height;
-            const type = Math.random() < 0.8 ? 'SWARM' : 'TANK';
+
+            // Weighted Spawn Pool:
+            // 50% Swarm (Goblin)
+            // 30% Ranged (Ratman)
+            // 15% Tank (Ogre)
+            // 5% Siege (Minotaur)
+            const roll = Math.random();
+            let type = 'SWARM';
+            if (roll < 0.5) type = 'SWARM';
+            else if (roll < 0.8) type = 'RANGED';
+            else if (roll < 0.95) type = 'TANK';
+            else type = 'SIEGE';
+
             this.entities.push(new Monster(x, y, type));
         }
         this.entities.forEach(e => e.update(dt, this));
@@ -458,3 +477,5 @@ class Game {
 }
 
 const game = new Game();
+// DEBUG: Expose game globally for state reading
+window.game = game;

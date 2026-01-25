@@ -7,19 +7,27 @@ import { Particle } from './Particle.js';
 import { ItemDrop } from './ItemDrop.js';
 import { ITEM_CONFIG } from '../config/ItemConfig.js';
 import { DebugLogger } from '../systems/DebugLogger.js';
+import { GameLogger } from '../systems/GameLogger.js';
 
 export class Hero {
     constructor(x, y, type) {
-        this.x = x;
-        this.y = y;
-        this.type = type;
-        this.color = type === 'WARRIOR' ? '#3498db' : '#27ae60';
+        // FIX: Validate spawn coordinates
+        this.x = Number.isFinite(x) ? x : 400;
+        this.y = Number.isFinite(y) ? y : 400;
+
+        // FIX: Validate type and fallback to WARRIOR if invalid
+        this.type = CLASS_CONFIG[type] ? type : 'WARRIOR';
+        if (!CLASS_CONFIG[type]) {
+            console.warn('[Hero] Invalid type:', type, '- defaulting to WARRIOR');
+        }
+
+        this.color = this.type === 'WARRIOR' ? '#3498db' : '#27ae60';
         this.radius = 15;
         this.visible = true;
         this.vel = { x: 0, y: 0 };
         this.acc = { x: 0, y: 0 };
 
-        this.name = Utils.generateFantasyName(type);
+        this.name = Utils.generateFantasyName(this.type);
         this.personality = {
             brave: Utils.rand(0.3, 1.0),
             greedy: Utils.rand(0.3, 1.0),
@@ -29,8 +37,8 @@ export class Hero {
         this.history = { kills: 0, goldEarned: 0, nearDeath: 0, timesWounded: 0 };
 
         this.level = 1;
-        const config = CLASS_CONFIG[type];
-        this.stats = new Stats(config.baseStats, this.level, type);
+        const config = CLASS_CONFIG[this.type];
+        this.stats = new Stats(config.baseStats, this.level, this.type);
 
         this.inventory = new Inventory(); // Belt-based system (no capacity parameter)
         this.gold = 0;
@@ -95,7 +103,11 @@ export class Hero {
             this.acc = { x: 0, y: 0 };
         }
 
-        if (this.hp <= 0) { this.remove = true; return; }
+        if (this.hp <= 0) {
+            GameLogger.log('DEATH', this, 'HERO_KILLED', { hp: this.hp, state: this.state, position: { x: this.x, y: this.y } });
+            this.remove = true;
+            return;
+        }
 
         if (!this.visible) {
             // CRITICAL FIX: If invisible but NOT properly inside a building, restore visibility
@@ -105,6 +117,7 @@ export class Hero {
 
             if (!shouldBeInvisible) {
                 // Hero is invisible but shouldn't be - restore them
+                GameLogger.log('VISIBILITY', this, 'RESTORED_FROM_INVALID_INVISIBLE', { state: this.state, isInsideBuilding: this.isInsideBuilding, position: { x: this.x, y: this.y } });
                 this.visible = true;
                 this.isInsideBuilding = false;
                 this.inBuilding = null;
@@ -203,6 +216,10 @@ export class Hero {
                 this.behaviorExplore(dt, game);
                 break;
         }
+
+        // FIX: Process accumulated acceleration into velocity and position
+        // Without this, heroes never move when using moveTowards()!
+        this.integrate(dt, game);
     }
 
     decideNextAction(game) {
@@ -369,10 +386,12 @@ export class Hero {
                         return;
                     }
                 } else {
+                    // FIX: Increased acceleration for final approach
                     const dx = door.x - this.x, dy = door.y - this.y;
                     const len = Math.hypot(dx, dy) || 1;
-                    this.acc.x += (dx / len) * 120 * dt;
-                    this.acc.y += (dy / len) * 120 * dt;
+                    const approachSpeed = 300;
+                    this.acc.x += (dx / len) * approachSpeed;
+                    this.acc.y += (dy / len) * approachSpeed;
                 }
             } else {
                 this.moveTowards(door.x, door.y, dt, game);
@@ -683,13 +702,19 @@ export class Hero {
 
             // Move AWAY from target
             const angle = Math.atan2(this.y - target.y, this.x - target.x);
-            const speed = CLASS_CONFIG[this.type].baseSpeed * this.stats.derived.moveSpeedMultiplier;
+
+            // FIX: Use validated config lookup with fallback
+            const config = CLASS_CONFIG[this.type] || CLASS_CONFIG['RANGER'];
+            const moveSpeedMult = this.stats?.derived?.moveSpeedMultiplier || 1;
+            const speed = config.baseSpeed * moveSpeedMult;
 
             // Only consume stamina if we actually move (speed > 0)
-            if (speed > 0) {
+            if (Number.isFinite(speed) && speed > 0) {
                 this.stamina -= kiteCost;
-                this.x += Math.cos(angle) * speed * dt;
-                this.y += Math.sin(angle) * speed * dt;
+                // FIX: Use acceleration instead of direct position modification
+                // This ensures integrate() handles NaN recovery
+                this.acc.x += Math.cos(angle) * speed * 2;
+                this.acc.y += Math.sin(angle) * speed * 2;
                 return true; // Successfully kiting
             }
             return false; // Stuck/Rooted
@@ -731,10 +756,12 @@ export class Hero {
                         return;
                     }
                 } else {
+                    // FIX: Increased acceleration for final approach (was 120*dt which is too weak)
                     const dx = door.x - this.x, dy = door.y - this.y;
                     const len = Math.hypot(dx, dy) || 1;
-                    this.acc.x += (dx / len) * 120 * dt;
-                    this.acc.y += (dy / len) * 120 * dt;
+                    const approachSpeed = 300; // Much stronger approach
+                    this.acc.x += (dx / len) * approachSpeed;
+                    this.acc.y += (dy / len) * approachSpeed;
                 }
             } else {
                 this.moveTowards(door.x, door.y, dt, game);
@@ -918,8 +945,15 @@ export class Hero {
     }
 
     moveTowards(tx, ty, dt, game) {
-        if (this.actionLockTimer > 0 || this.isAiming) return;
-        let maxSpeed = CLASS_CONFIG[this.type].baseSpeed * this.stats.derived.moveSpeedMultiplier * (this.skillActive?.speedMult || 1);
+        // FIX: Remove undefined actionLockTimer check, keep isAiming
+        if (this.isAiming) {
+            DebugLogger.log('MOVE', this.name, 'BLOCKED_AIMING');
+            return;
+        }
+        // FIX: Add fallback config lookup for safety
+        const config = CLASS_CONFIG[this.type] || CLASS_CONFIG['WARRIOR'];
+        const moveSpeedMult = this.stats?.derived?.moveSpeedMultiplier || 1;
+        let maxSpeed = config.baseSpeed * moveSpeedMult * (this.skillActive?.speedMult || 1);
         const staminaPct = this.stamina / this.maxStamina; if (staminaPct < 0.2) maxSpeed *= 0.5;
         const dx = tx - this.x, dy = ty - this.y;
         const dist = Math.hypot(dx, dy);
@@ -1099,7 +1133,21 @@ export class Hero {
     }
 
     integrate(dt, game) {
-        const maxSpeed = CLASS_CONFIG[this.type].baseSpeed * this.stats.derived.moveSpeedMultiplier * (this.skillActive?.speedMult || 1);
+        // FIX: Safety check for invalid type - fallback to WARRIOR config
+        const config = CLASS_CONFIG[this.type] || CLASS_CONFIG['WARRIOR'];
+        const moveSpeedMult = this.stats?.derived?.moveSpeedMultiplier || 1;
+        const maxSpeed = config.baseSpeed * moveSpeedMult * (this.skillActive?.speedMult || 1);
+
+        // FIX: NaN position recovery
+        if (!Number.isFinite(this.x) || !Number.isFinite(this.y)) {
+            console.warn('[Hero] NaN position detected, recovering...', { type: this.type, x: this.x, y: this.y });
+            this.x = this.prevX || game?.castle?.x || 400;
+            this.y = this.prevY || game?.castle?.y || 400;
+            this.vel.x = 0; this.vel.y = 0;
+            this.acc.x = 0; this.acc.y = 0;
+            return;
+        }
+
         // HARD STOP hanya saat sedang FIGHT
         if (this.isEngaged && this.state === 'FIGHT') {
             this.vel.x = 0; this.vel.y = 0;

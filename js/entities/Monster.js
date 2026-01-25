@@ -1,7 +1,9 @@
 // ... imports ...
 import { Utils } from '../utils.js';
 import { Particle } from './Particle.js';
+import { Projectile } from './Projectile.js';
 import { MONSTER_ARCHETYPES } from '../config/ClassConfig.js';
+import { GameLogger } from '../systems/GameLogger.js';
 
 export class Monster {
     constructor(x, y, archetypeKey = 'SWARM') {
@@ -23,6 +25,7 @@ export class Monster {
         this.dodgeChance = config.dodgeChance || 0;
         this.parryChance = config.parryChance || 0;
         this.resistPct = config.resistPct || 0;
+        this.attackRange = config.attackRange || 20; // Default 20 if not specified
 
         this.radius = archetypeKey === 'TANK' ? 20 : 12;
         this.remove = false;
@@ -58,10 +61,39 @@ export class Monster {
         // Engagement Slots for melee attackers
         this.engagedHeroes = new Set();
         this.maxMeleeSlots = 4;
+
+        // ADVANCED AI
+        this.behavior = config.behavior || 'NORMAL';
+        this.swarmThreshold = config.swarmThreshold || 0;
+        this.state = 'HUNT'; // Default state: HUNT, GATHER, SIEGE
+        this.gatherPoint = null;
+        this.gatherTimer = 0;
+        this.projectileColor = config.projectileColor || '#ff0000';
+
+        this.initSwarm();
+    }
+
+    initSwarm() {
+        // 40% chance for SWARM types to gather first
+        if (this.behavior === 'SWARM' && Math.random() < 0.4) {
+            this.state = 'GATHER';
+            this.gatherTimer = Utils.rand(10, 20); // Wait 10-20 seconds max
+            // Pick a gather point 300-500px from spawn (or castle)
+            this.gatherPoint = {
+                x: this.x + Utils.rand(-200, 200),
+                y: this.y + Utils.rand(-200, 200)
+            };
+        }
     }
 
     update(dt, game) {
-        if (this.hp <= 0 || this.remove) return;
+        if (this.hp <= 0 || this.remove) {
+            if (this.hp <= 0 && !this.deathLogged) {
+                GameLogger.log('DEATH', this, 'MONSTER_KILLED', { hp: this.hp, target: this.target?.name });
+                this.deathLogged = true;
+            }
+            return;
+        }
         if (this.attackCooldown > 0) this.attackCooldown -= dt;
         if (this.attackWindup > 0) this.attackWindup -= dt;
         if (this.lungeTimer > 0) this.lungeTimer -= dt;
@@ -71,9 +103,6 @@ export class Monster {
         // BALANCING: Decision Delay
         if (this.decisionTimer > 0) {
             this.decisionTimer -= dt;
-            // If waiting, we might still move if we have a target, but let's say we pause thinking?
-            // Or maybe this only affects switching targets?
-            // For now, let's make it a hard pause for "thinking" to slow down chaos
             if (!this.target) return;
         }
 
@@ -93,6 +122,12 @@ export class Monster {
         // Update engaged lock timer
         if (this.engagedLockTimer > 0) {
             this.engagedLockTimer -= dt;
+        }
+
+        // SWARM BEHAVIOR: GATHER STATE
+        if (this.state === 'GATHER') {
+            this.updateGather(dt, game);
+            return;
         }
 
         // EARLY TARGET VALIDATION - Clear dead/removed targets immediately
@@ -127,15 +162,15 @@ export class Monster {
                 this.aggroTarget = null;
                 this.aggroTimer = 0;
             } else {
-                // Chase the attacker (Hero or Tower) who damaged us
-                // Aggro overrides active target but keep siegeTarget to return later
                 this.target = this.aggroTarget;
             }
         }
 
         // STEP 2: OPPORTUNITY - If a Hero gets too close (Notice Range), attack them
-        // Only check if we're not locked onto a siege target
-        if ((!this.target || (this.target.constructor.name !== 'Hero' && this.target.constructor.name !== 'Worker' && this.target.constructor.name !== 'CastleGuard')) && this.siegeLockTimer <= 0 && this.targetStickTimer <= 0) {
+        // SIEGE monsters ignore this unless they are blocked (stuck)
+        if ((!this.target || (this.target.constructor.name !== 'Hero' && this.target.constructor.name !== 'Worker' && this.target.constructor.name !== 'CastleGuard')) &&
+            this.siegeLockTimer <= 0 && this.targetStickTimer <= 0 &&
+            (this.behavior !== 'SIEGE' || this.moveBlocked)) {
             let nearbyUnit = null;
             let closestDist = this.noticeRange;
 
@@ -155,47 +190,37 @@ export class Monster {
                     this.target = nearbyUnit;
                     this.reactionTimer = Utils.rand(0.2, 0.7);
                     this.targetStickTimer = 3.0;
-                    // Keep siegeTarget to return later if hero escapes
                 }
             }
         }
 
-        // STEP 3: SIEGE - Target the nearest building (Guilds, Markets, Towers, or Castle)
-        // Only if we're not in aggro mode and siege lock has expired or no siege target
+        // STEP 3: SIEGE - Target the nearest building
         if (!this.aggroTarget && this.aggroTimer <= 0) {
             const isCurrentTargetBuilding = this.target &&
                 (this.target.constructor.name === 'EconomicBuilding' ||
                     this.target.constructor.name === 'Building');
 
-            // If we have a siege target and lock timer is active, stick with it
             if (this.siegeTarget && this.siegeLockTimer > 0) {
-                // Validate siege target
                 if (this.siegeTarget.remove || this.siegeTarget.hp <= 0) {
                     this.siegeTarget = null;
                     this.siegeLockTimer = 0;
                     this.target = null;
                 } else {
-                    // Keep targeting the locked siege target
                     this.target = this.siegeTarget;
                 }
             }
 
-            // If no valid target or siege lock expired, find new building
             if (!this.target || (!isCurrentTargetBuilding && this.siegeLockTimer <= 0)) {
-                // Validate current target
                 if (this.target && (this.target.remove ||
                     (this.target.constructor.name === 'Hero' && (!this.target.visible || this.target.hp <= 0)))) {
                     this.target = null;
                 }
 
-                // If no valid target, find the closest building to attack
                 if (!this.target) {
                     let closestBuilding = null;
                     let minDistance = Infinity;
 
-                    // Iterate through all entities to find buildings
                     game.entities.forEach(e => {
-                        // Check for both 'EconomicBuilding' (Guilds, Markets, Towers, Castle) and 'Building'
                         const isBuilding = e.constructor.name === 'EconomicBuilding' ||
                             e.constructor.name === 'Building';
 
@@ -208,29 +233,24 @@ export class Monster {
                         }
                     });
 
-                    // Default to castle only if no other buildings exist
                     const newTarget = closestBuilding || (game.castle && !game.castle.remove ? game.castle : null);
 
                     if (newTarget) {
                         this.target = newTarget;
                         this.siegeTarget = newTarget;
-                        this.siegeLockTimer = this.siegeLockDuration; // Lock onto this building
-                        this.decisionTimer = Utils.rand(0.5, 1.5); // Pause before engaging
+                        this.siegeLockTimer = this.siegeLockDuration;
+                        this.decisionTimer = Utils.rand(0.5, 1.5);
                     }
                 }
             }
         }
 
-        // Maintain space AFTER target is determined (prevents stale direction)
         this.maintainSpace(game.entities, dt);
 
-        // MOVE / ATTACK (only if target is valid)
         if (!this.target) {
-            // No valid target - stand still
             return;
         }
 
-        // Final validation before movement/attack
         if (this.target.remove || this.target.hp <= 0 ||
             ((this.target.constructor.name === 'Hero' || this.target.constructor.name === 'Worker' || this.target.constructor.name === 'CastleGuard') && (!this.target.visible || this.target.hp <= 0))) {
             this.target = null;
@@ -238,47 +258,51 @@ export class Monster {
         }
 
         const distToTarget = Utils.dist(this.x, this.y, this.target.x, this.target.y);
-        const attackRange = this.radius + 20;
-
-        // Fix: For large buildings, distance to center is misleading. 
-        // Use distance to edge/door if target is a building.
+        const attackRange = this.radius + this.attackRange;
         let effectiveRange = attackRange;
-        let targetPoint = { x: this.target.x, y: this.target.y };
 
+        if (!Number.isFinite(this.target.x) || !Number.isFinite(this.target.y)) {
+            console.warn('[Monster] Target has invalid coordinates:', this.target.type || this.target.name);
+            this.target = null;
+            return;
+        }
+
+        let targetPoint = { x: this.target.x, y: this.target.y };
         const isBuilding = this.target.constructor.name === 'EconomicBuilding' || this.target.constructor.name === 'Building';
         if (isBuilding) {
-            // Use door point or approximate edge
             if (game.getDoorPoint) {
                 targetPoint = game.getDoorPoint(this.target);
             }
-            // Increase range slightly for buildings to account for size
+            if (!Number.isFinite(targetPoint.x) || !Number.isFinite(targetPoint.y)) {
+                targetPoint = { x: this.target.x, y: this.target.y };
+            }
             effectiveRange = attackRange + 10;
-            // Only clamp door points to canvas for buildings
             if (game && game.canvas) {
                 targetPoint.x = Math.max(0, Math.min(game.canvas.width, targetPoint.x));
                 targetPoint.y = Math.max(0, Math.min(game.canvas.height, targetPoint.y));
             }
         } else {
-            // For unit targets, add their radius to our effective range
             const targetRadius = this.target.radius || 15;
             effectiveRange = attackRange + targetRadius;
         }
+
+        if (!Number.isFinite(this.x) || !Number.isFinite(this.y) ||
+            !Number.isFinite(targetPoint.x) || !Number.isFinite(targetPoint.y)) {
+            return;
+        }
+
         const distToPoint = Utils.dist(this.x, this.y, targetPoint.x, targetPoint.y);
-
-        // Hysteresis: once engaged, use a slightly larger "stay engaged" range to prevent oscillation
         const engageBuffer = this.isEngaged ? 8 : 0;
-
-        // Only disengage if lock timer expired AND we're outside the buffer zone
-        const shouldDisengage = distToPoint > (effectiveRange + engageBuffer) && this.engagedLockTimer <= 0;
+        const wayOutsideRange = distToPoint > (effectiveRange + 50);
+        const shouldDisengage = distToPoint > (effectiveRange + engageBuffer) && (this.engagedLockTimer <= 0 || wayOutsideRange);
 
         if (shouldDisengage) {
-            // Move towards target
             const dx = targetPoint.x - this.x, dy = targetPoint.y - this.y;
             const dist = Math.hypot(dx, dy);
             const dir = dist > 0 ? { x: dx / dist, y: dy / dist } : { x: 0, y: 0 };
             const arriveRadius = 50;
             const desiredSpeed = dist < arriveRadius ? this.speed * (dist / arriveRadius) : this.speed;
-            // Flow blending jika target bangunan
+
             let flow = { x: 0, y: 0 };
             if (this.target && this.target.constructor.name === 'EconomicBuilding' && this.target.id) {
                 const door = game.getDoorPoint(this.target);
@@ -287,16 +311,21 @@ export class Monster {
                 const door = game.getDoorPoint(this.siegeTarget);
                 flow = game.getFlowVector(this.siegeTarget.id + ':door', door.x, door.y, this.x, this.y);
             }
+
+            if (!Number.isFinite(flow.x) || !Number.isFinite(flow.y)) {
+                flow = { x: 0, y: 0 };
+            }
+
             let flowWeight = 0.6;
             if ((this.target && this.target.constructor.name === 'EconomicBuilding') && dist < 100) {
                 flowWeight = 0.0;
             }
             let blendDir = Utils.normalize(dir.x + flow.x * flowWeight, dir.y + flow.y * flowWeight);
             if (this.moveBlocked) {
-                if (this.blockedTimer <= 0) { this.blockedTimer = 0.35; this.blockedSide = Math.random() < 0.5 ? -1 : 1; }
+                if (this.blockedTimer <= 0) { this.blockedTimer = 0.5; this.blockedSide = Math.random() < 0.5 ? -1 : 1; }
                 const perp = Utils.perp(blendDir.x, blendDir.y);
                 const steerSide = { x: perp.x * this.blockedSide, y: perp.y * this.blockedSide };
-                blendDir = Utils.normalize(blendDir.x + steerSide.x * 0.8, blendDir.y + steerSide.y * 0.8);
+                blendDir = Utils.normalize(blendDir.x + steerSide.x * 1.2, blendDir.y + steerSide.y * 1.2);
             } else {
                 if (this.blockedTimer > 0) this.blockedTimer = Math.max(0, this.blockedTimer - dt);
                 if (this.blockedTimer <= 0) this.blockedSide = 0;
@@ -313,16 +342,20 @@ export class Monster {
         else {
             // In attack range
             if (this.attackCooldown <= 0) {
+                // RANGED ATTACK
+                if (this.behavior === 'RANGED') {
+                    this.fireProjectile(game);
+                    this.attackCooldown = 1.5;
+                    return;
+                }
+
                 if (!this.preparedAttack) {
-                    // Start windup
                     this.attackWindup = 0.2;
                     this.preparedAttack = true;
                 } else if (this.attackWindup <= 0) {
-                    // Final check before attacking
                     const isHero = this.target.constructor.name === 'Hero';
                     const isWorker = this.target.constructor.name === 'Worker';
                     const isGuard = this.target.constructor.name === 'CastleGuard';
-                    // FIX: Check HP and visibility for ALL unit types
                     const isValidUnit = (isHero && this.target.visible && this.target.hp > 0) ||
                         (isWorker && this.target.hp > 0) ||
                         (isGuard && this.target.hp > 0);
@@ -330,14 +363,13 @@ export class Monster {
                         this.target.constructor.name === 'Building';
                     const isValidBuilding = isBuilding && this.target.hp > 0;
 
-                    // FIX: Re-check distance before attacking (target may have moved)
-                    // Use same range calculation as movement check for consistency
-                    const currentDist = Utils.dist(this.x, this.y, this.target.x, this.target.y);
-                    // For units: monster radius + target radius + buffer
-                    // For buildings: effectiveRange already includes building offset
-                    const targetRadius = (isBuilding ? 0 : (this.target.radius || 15));
-                    const maxAttackDist = this.radius + targetRadius + 25;
-                    const targetInRange = currentDist <= maxAttackDist;
+                    const targetInRange = distToPoint <= effectiveRange;
+
+                    if (isBuilding && !targetInRange) {
+                        GameLogger.log('COMBAT', this, 'BUILDING_ATTACK_OUT_OF_RANGE', {
+                            distToPoint, effectiveRange, building: this.target.type
+                        });
+                    }
 
                     if (this.target && this.target.takeDamage &&
                         !this.target.remove && targetInRange &&
@@ -350,18 +382,19 @@ export class Monster {
                         this.lungeVec = { x: Math.cos(ang) * 4, y: Math.sin(ang) * 4 };
                         this.lungeTimer = 0.12;
                     } else {
-                        // Target became invalid during attack, drop it and reset state
                         this.target = null;
                         this.isEngaged = false;
                     }
                     this.preparedAttack = false;
                 }
-            }
 
-            this.isEngaged = true;
-            this.engagedLockTimer = 0.5; // Lock engagement for 0.5 seconds to prevent jittering
-            this.vel.x = 0; this.vel.y = 0;
-            this.acc.x = 0; this.acc.y = 0;
+                this.isEngaged = true;
+                this.engagedLockTimer = 0.5;
+                this.vel.x = 0; this.vel.y = 0;
+                this.acc.x = 0; this.acc.y = 0;
+            } else {
+                this.isEngaged = true;
+            }
         }
         if (this.targetStickTimer > 0) this.targetStickTimer -= dt;
     }
@@ -376,7 +409,6 @@ export class Monster {
         return Utils.dist(this.x, this.y, this.target.x, this.target.y);
     }
 
-    // Simple distance estimate for maintainSpace (doesn't need game reference)
     getDistanceToTargetEstimate() {
         if (!this.target) return Infinity;
         return Utils.dist(this.x, this.y, this.target.x, this.target.y);
@@ -396,15 +428,6 @@ export class Monster {
 
     maintainSpace(entities, dt) {
         this.moveBlocked = false;
-        // Override: jika sangat dekat pintu target gedung, matikan repulsi untuk memastikan mendekat
-        if (this.target && this.target.constructor.name === 'EconomicBuilding') {
-            const doorX = this.target.x;
-            const doorY = this.target.y + (this.target.height / 2) - 5;
-            const dd = Utils.dist(this.x, this.y, doorX, doorY);
-            if (dd < 30) {
-                return;
-            }
-        }
         let sepX = 0, sepY = 0;
         entities.forEach(e => {
             if (e === this || e.remove) return;
@@ -417,10 +440,9 @@ export class Monster {
                     const nx = (this.x - e.x) / dist;
                     const ny = (this.y - e.y) / dist;
                     const overlap = (minGap - dist);
-                    // Reduce separation when close to target to prevent oscillation
                     const approachingTarget = this.target && this.getDistanceToTargetEstimate &&
                         this.getDistanceToTargetEstimate() < 50;
-                    const scale = this.isEngaged ? 0.0 : (approachingTarget ? 0.1 : 0.25);
+                    const scale = this.isEngaged ? 0.08 : (approachingTarget ? 0.15 : 0.3);
                     sepX += nx * overlap * scale;
                     sepY += ny * overlap * scale;
                 }
@@ -429,7 +451,7 @@ export class Monster {
                 const dir = Utils.normalize(fx - this.x, fy - this.y);
                 const ax = e.x - this.x, ay = e.y - this.y;
                 const aheadDot = Utils.dot(dir.x, dir.y, (ax / ((dist || 1))), (ay / ((dist || 1))));
-                if (aheadDot > 0.6 && dist < minGap * 0.8) this.moveBlocked = true;
+                if (aheadDot > 0.5 && dist < minGap * 1.2) this.moveBlocked = true;
             }
             if (e.constructor.name === 'EconomicBuilding') {
                 if (this.target === e || this.isEngaged) return;
@@ -469,24 +491,19 @@ export class Monster {
             return;
         }
 
-        // HARD STOP when engaged in combat
-        if (this.isEngaged) {
+        if (this.isEngaged && this.attackCooldown <= 0) {
             this.vel.x = 0; this.vel.y = 0;
             this.acc.x = 0; this.acc.y = 0;
             return;
         }
-        // Limit acceleration then apply
         const aLimited = Utils.limitVec(this.acc.x, this.acc.y, this.speed * 3);
         this.vel.x += aLimited.x * dt;
         this.vel.y += aLimited.y * dt;
-        // Apply friction/dampening
         const friction = 0.97;
         this.vel.x *= friction;
         this.vel.y *= friction;
-        // Clamp to max speed
         const limited = Utils.limitVec(this.vel.x, this.vel.y, this.speed);
         this.vel.x = limited.x; this.vel.y = limited.y;
-        // Stop completely if velocity is negligible
         const velMag = Math.hypot(this.vel.x, this.vel.y);
         this.walkPhase = (this.walkPhase || 0) + (velMag > 0.5 ? velMag * 0.05 : 0) * dt * 60;
         if (velMag < 0.02) { this.vel.x = 0; this.vel.y = 0; }
@@ -499,8 +516,71 @@ export class Monster {
         this.acc.x = 0; this.acc.y = 0;
     }
 
+    updateGather(dt, game) {
+        this.gatherTimer -= dt;
+        if (this.gatherTimer <= 0) {
+            this.state = 'HUNT';
+            return;
+        }
+
+        // 1. Move to gather point
+        const dist = Utils.dist(this.x, this.y, this.gatherPoint.x, this.gatherPoint.y);
+        if (dist > 50) {
+            // Move towards gather point
+            const dx = this.gatherPoint.x - this.x;
+            const dy = this.gatherPoint.y - this.y;
+            const angle = Math.atan2(dy, dx);
+            this.acc.x += Math.cos(angle) * this.speed * 4; // Use acceleration
+            this.acc.y += Math.sin(angle) * this.speed * 4;
+        } else {
+            // 2. Nervous Idle (Random jitter)
+            if (Math.random() < 0.05) {
+                const jitterAngle = Math.random() * Math.PI * 2;
+                this.acc.x += Math.cos(jitterAngle) * this.speed * 5;
+                this.acc.y += Math.sin(jitterAngle) * this.speed * 5;
+            }
+        }
+
+        // 3. Check for friends
+        if (Math.floor(this.gatherTimer) !== Math.floor(this.gatherTimer + dt)) {
+            let allies = 0;
+            const checkRadius = 150;
+            for (const e of game.entities) {
+                if (e.constructor.name === 'Monster' &&
+                    e !== this &&
+                    e.behavior === 'SWARM' &&
+                    Utils.dist(this.x, this.y, e.x, e.y) < checkRadius) {
+                    allies++;
+                }
+            }
+
+            if (allies >= this.swarmThreshold) {
+                this.state = 'HUNT';
+                game.entities.push(new Particle(this.x, this.y - 30, "ATTACK!", "red"));
+            }
+        }
+    }
+
+    fireProjectile(game) {
+        if (this.target) {
+            const proj = new Projectile(
+                this.x,
+                this.y - 15,
+                this.target,
+                this.damage,
+                this,
+                this.projectileColor
+            );
+            game.entities.push(proj);
+        }
+    }
+
     takeDamage(amount, game, source = null) {
-        // COMBAT STATS LOGIC
+        if (this.state === 'GATHER') {
+            this.state = 'HUNT';
+            this.gatherTimer = 0;
+        }
+
         if (Math.random() < this.dodgeChance) {
             if (game) game.entities.push(new Particle(this.x, this.y - 20, "DODGE", "cyan"));
             return;
@@ -514,32 +594,39 @@ export class Monster {
         if (this.resistPct > 0) {
             const resisted = amount * this.resistPct;
             amount -= resisted;
-            // Optional: Show resist text? Maybe too cluttered.
         }
 
         this.hp -= amount;
         this.flashTimer = 0.06;
         if (game) game.entities.push(new Particle(this.x, this.y - 20, "-" + Math.floor(amount), "#ff5555"));
 
-        // TRACK DAMAGE
         if (source) {
-            // Unwrap projectile source if needed (though Projectile passes the real source usually)
-            // But here we trust 'source' is the entity that caused damage
             const currentDamage = this.damageHistory.get(source) || 0;
             this.damageHistory.set(source, currentDamage + amount);
 
-            // AGGRO: If damaged by a Hero OR a Tower, set them as retaliation target for 5 seconds
             const isHero = source.constructor.name === 'Hero';
             const isTower = source.constructor.name === 'EconomicBuilding' && source.type === 'TOWER';
 
-            // If I was hit by a Hero OR a Tower, and they're still valid
             if ((isHero && source.visible && !source.remove && source.hp > 0) ||
                 (isTower && !source.remove && source.hp > 0)) {
-                this.aggroTarget = source;
-                this.aggroTimer = 5.0; // Chase for 5 seconds
-                // Immediately switch target to the attacker
-                this.target = source;
-                this.targetStickTimer = 0;
+
+                const currentTargetDist = this.target ? Utils.dist(this.x, this.y, this.target.x, this.target.y) : Infinity;
+                const newAttackerDist = Utils.dist(this.x, this.y, source.x, source.y);
+
+                const shouldSwitch = !this.target ||
+                    this.target.remove ||
+                    this.target.hp <= 0 ||
+                    (newAttackerDist < currentTargetDist * 0.5);
+
+                if (shouldSwitch) {
+                    this.aggroTarget = source;
+                    this.aggroTimer = 5.0;
+                    this.target = source;
+                    this.targetStickTimer = 2.0;
+                } else {
+                    this.aggroTarget = source;
+                    this.aggroTimer = 5.0;
+                }
             }
         }
 
@@ -554,7 +641,6 @@ export class Monster {
         let totalHeroDamage = 0;
         const heroDamageMap = new Map();
 
-        // 1. Filter and sum damage from Heroes
         for (const [source, damage] of this.damageHistory.entries()) {
             if (source.constructor.name === 'Hero') {
                 totalHeroDamage += damage;
@@ -562,36 +648,20 @@ export class Monster {
             }
         }
 
-        // 2. Determine distribution
         if (totalHeroDamage > 0) {
-            // Heroes contributed!
-
-            // Calculate Last Hit Bonus (20%)
             const bonusAmount = Math.floor(totalGold * 0.2);
             const poolAmount = totalGold - bonusAmount;
 
-            // If killer is a Hero, they get the bonus
             if (killer && killer.constructor.name === 'Hero') {
                 killer.gold += bonusAmount;
                 killer.history.goldEarned += bonusAmount;
                 game.entities.push(new Particle(killer.x, killer.y - 40, `+${bonusAmount}g (Kill)`, "gold"));
-            } else {
-                // Killer was not a hero (e.g. Tower), or unknown.
-                // Add bonus back to pool? Or give to Treasury?
-                // Prompt: "if they [building] last hit, gold still shared among the heroes."
-                // So we just distribute the bonus along with the pool, effectively making the pool 100%
-                // But wait, if we add it to pool, it's distributed by damage.
-                // If we want to strictly follow "last hit get bigger %", we only give bonus if hero killed.
-                // If building killed, no one gets "last hit bonus", so the whole pot is shared.
-                // So effectively, poolAmount becomes totalGold.
-                // BUT, if we want to be nice, maybe we just distribute totalGold proportional to damage.
             }
 
             const distributeAmount = (killer && killer.constructor.name === 'Hero') ? poolAmount : totalGold;
 
-            // Distribute the rest based on damage contribution
             for (const [hero, damage] of heroDamageMap.entries()) {
-                if (hero.remove) continue; // Skip removed heroes (optional, but safer)
+                if (hero.remove) continue;
 
                 const share = Math.floor((damage / totalHeroDamage) * distributeAmount);
                 if (share > 0) {
@@ -601,7 +671,6 @@ export class Monster {
                 }
             }
         } else {
-            // No heroes involved (Tower solo kill) -> Treasury
             game.gold += totalGold;
             game.entities.push(new Particle(this.x, this.y - 30, `+${totalGold}g`, "yellow"));
         }
@@ -614,9 +683,9 @@ export class Monster {
         if (vm > 0.5) { oy += Math.sin((this.walkPhase || 0)) * 1.2; }
         Utils.drawSprite(ctx, 'monster', this.x + ox, this.y + oy, this.radius * 2, this.color);
         if (this.flashTimer > 0) { ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(this.x, this.y, this.radius + 5, 0, Math.PI * 2); ctx.stroke(); }
-        ctx.fillStyle = 'red';
+        ctx.fillStyle = '#333';
         ctx.fillRect(this.x - 10, this.y - 15, 20, 3);
-        ctx.fillStyle = '#00ff00';
+        ctx.fillStyle = '#ff3333';
         ctx.fillRect(this.x - 10, this.y - 15, 20 * (this.hp / this.maxHp), 3);
     }
 }

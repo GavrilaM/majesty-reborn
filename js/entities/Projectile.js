@@ -1,12 +1,13 @@
 import { Utils } from '../utils.js';
 
 export class Projectile {
-    constructor(x, y, target, damage, source = null) {
+    constructor(x, y, target, damage, source = null, color = "white") {
         this.x = x;
         this.y = y;
         this.target = target;
         this.damage = damage;
         this.source = source; // Who fired this projectile (Hero, Tower, etc.)
+        this.color = color;
         this.speed = 200; // Fast!
         this.remove = false;
     }
@@ -27,20 +28,20 @@ export class Projectile {
         if (dist < 10) {
             // HIT! Pass the source so target knows who to blame
             this.target.takeDamage(this.damage, game, this.source);
-            
+
             // Create Damage Number
             // We need to import Particle, but to avoid circular imports, 
             // we can check if the game has a method for it or handle it in Game.js
             // For now, let's just assume the target handles its own damage display
-            
+
             this.remove = true;
         }
     }
 
     draw(ctx) {
-        ctx.fillStyle = 'white';
+        ctx.fillStyle = this.color;
         ctx.beginPath();
-        ctx.arc(this.x, this.y, 3, 0, Math.PI*2);
+        ctx.arc(this.x, this.y, 3, 0, Math.PI * 2);
         ctx.fill();
     }
 }

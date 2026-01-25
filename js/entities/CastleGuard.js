@@ -38,8 +38,13 @@ export class CastleGuard {
             if (this.lockTimer > 0) this.lockTimer -= dt;
             if (!this.target || this.target.remove || this.target.hp <= 0) { this.state = 'PATROL'; this.target = null; this.lockTimer = 0; return; }
             const d = Utils.dist(this.x, this.y, this.target.x, this.target.y);
-            if (d > 40) { this.moveTowards(this.target.x, this.target.y, dt); }
-            else if (this.attackCooldown <= 0) { this.target.takeDamage(this.damage, game, this); this.attackCooldown = 1.4; }
+            if (d > 40) {
+                this.moveTowards(this.target.x, this.target.y, dt);
+            } else if (this.attackCooldown <= 0 && d <= 40) {
+                // FIX: Explicit range check before attacking
+                this.target.takeDamage(this.damage, game, this);
+                this.attackCooldown = 1.4;
+            }
             // If lock expired and a closer threat to castle exists, consider switching
             if (this.lockTimer <= 0) {
                 const t2 = this.findNearestMonsterNearCastle(game, 180);
