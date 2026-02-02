@@ -37,6 +37,13 @@ export class UIManager {
                 if (!warriorBtn && !rangerBtn) return;
                 const b = this.selectedEntity;
                 if (!b || !(b instanceof EconomicBuilding) || b.type !== 'GUILD') return;
+
+                // FIX: Prevent recruiting if not constructed
+                if (!b.constructed) {
+                    this.game.entities.push(new (this.game.entities[0].constructor)(b.x, b.y - 40, "Building not ready!", "red"));
+                    return;
+                }
+
                 if (warriorBtn) this.game.recruit('WARRIOR', b);
                 else if (rangerBtn) this.game.recruit('RANGER', b);
             });
@@ -48,8 +55,9 @@ export class UIManager {
                 if (!row) return;
                 const idx = Array.prototype.indexOf.call(vList.children, row);
                 const currB = this.selectedEntity;
-                if (!currB || currB.constructor.name !== 'EconomicBuilding') return;
-                if (currB.visitors && currB.visitors[idx]) {
+                // Support any entity with visitors array (EconomicBuilding, Castle, Guild, etc.)
+                if (!currB || !currB.visitors) return;
+                if (currB.visitors[idx]) {
                     e.stopPropagation();
                     this.select(currB.visitors[idx]);
                 }
@@ -63,6 +71,31 @@ export class UIManager {
         const goldEl = document.getElementById('gold-display');
         if (goldEl) goldEl.innerText = Math.floor(this.game.gold);
 
+        // WAVE DISPLAY
+        const waveEl = document.getElementById('wave-display');
+        if (waveEl) {
+            const state = this.game.waveState;
+            const wave = this.game.currentWave;
+            const timer = Math.ceil(this.game.waveTimer);
+
+            if (state === 'BUILD') {
+                if (wave === 0) {
+                    waveEl.innerText = `Prepare! Wave 1 in ${timer}s`;
+                } else {
+                    waveEl.innerText = `Build Phase - Wave ${wave + 1} in ${timer}s`;
+                }
+            } else if (state === 'COMBAT') {
+                const remaining = this.game.entities.filter(e =>
+                    e.constructor.name === 'Monster' && !e.remove && e.hp > 0
+                ).length + this.game.waveSpawnQueue.length;
+                waveEl.innerText = `Wave ${wave} - ${remaining} enemies`;
+            } else if (state === 'VICTORY') {
+                waveEl.innerText = '🏆 VICTORY!';
+            } else if (state === 'DEFEAT') {
+                waveEl.innerText = '💀 DEFEAT';
+            }
+        }
+
         if (this.selectedEntity) {
             if (this.selectedEntity.remove) {
                 this.deselect();
@@ -70,6 +103,7 @@ export class UIManager {
                 if (this.selectedEntity.constructor.name === 'Hero') this.updateHeroData();
                 if (this.selectedEntity instanceof EconomicBuilding || this.selectedEntity.constructor.name === 'EconomicBuilding') this.updateBuildingData();
                 if (this.selectedEntity.constructor.name === 'Monster') this.updateMonsterData();
+                if (this.selectedEntity.constructor.name === 'TaxCollector') this.updateTaxCollectorData(this.selectedEntity);
             }
         }
 
@@ -123,6 +157,7 @@ export class UIManager {
             const vList = document.getElementById('bld-visitor-list');
             if (vList) {
                 vList.dataset.buildingId = entity.id || entity.name || 'building';
+                vList.dataset.lastFingerprint = ''; // Reset fingerprint on entity change
                 vList.replaceChildren();
             }
             this.updateBuildingData();
@@ -131,6 +166,11 @@ export class UIManager {
             if (this.viewMonster) this.viewMonster.classList.remove('hidden');
             this.renderButtons('HERO');
             this.updateNPCData(entity);
+        }
+        else if (entity.constructor.name === 'TaxCollector') {
+            if (this.viewMonster) this.viewMonster.classList.remove('hidden');
+            this.renderButtons('DEFAULT');
+            this.updateTaxCollectorData(entity);
         }
     }
 
@@ -170,12 +210,13 @@ export class UIManager {
             this.actionGrid.appendChild(btn);
         };
 
-        if (context === 'DEFAULT' || context === 'MARKET' || context === 'BUILDING') {
+        if (context === 'DEFAULT' || context === 'MARKET' || context === 'BUILDING' || context === 'BLACKSMITH') {
             addBtn('🚩', 'Bounty', '100g', () => this.game.toggleFlagMode());
             addBtn('🏛️', 'Warrior Guild', '300g', () => this.game.builder.startBuild('WARRIOR_GUILD'));
             addBtn('🏹', 'Ranger Guild', '300g', () => this.game.builder.startBuild('RANGER_GUILD'));
             addBtn('⚖️', 'Market', '200g', () => this.game.builder.startBuild('MARKET'));
             addBtn('🗼', 'Tower', '150g', () => this.game.builder.startBuild('TOWER'));
+            addBtn('🔨', 'Blacksmith', '350g', () => this.game.builder.startBuild('BLACKSMITH'));
         }
         else if (context === 'GUILD') {
             addBtn('🔙', 'Back', '', () => this.deselect());
@@ -213,15 +254,47 @@ export class UIManager {
             <div class="stat-item"><span>LUK</span> <span class="stat-val">${Math.floor(stats.LUK)}</span></div>
         `;
 
-        // ITEMS TAB - Display Belt slots
+        // ITEMS TAB - Display Equipment and Belt
         const invEl = document.getElementById('insp-inventory');
         if (invEl) {
             invEl.innerHTML = '';
 
+            // EQUIPMENT SECTION
+            const equipLabel = document.createElement('div');
+            equipLabel.style.cssText = 'font-size:10px; color:#888; margin-bottom:4px; border-bottom:1px solid #444; padding-bottom:4px;';
+            equipLabel.innerText = 'EQUIPMENT';
+            invEl.appendChild(equipLabel);
+
+            // Weapon Slot
+            const weaponSlot = document.createElement('div');
+            weaponSlot.className = 'inv-slot filled';
+            weaponSlot.style.cssText = 'display:inline-flex; flex-direction:column; align-items:center; margin-right:8px; padding:4px; background:#222; border:1px solid #444; border-radius:4px; min-width:60px;';
+            const weapon = h.equipment?.weapon;
+            weaponSlot.innerHTML = `
+                <span style="font-size:16px;">⚔️</span>
+                <span style="font-size:8px; color:#ffd700;">${weapon?.name || 'None'}</span>
+                <span style="font-size:7px; color:#888;">+${weapon?.damage || 0} DMG</span>
+            `;
+            weaponSlot.title = weapon ? `${weapon.name}\n${weapon.description}` : 'No weapon';
+            invEl.appendChild(weaponSlot);
+
+            // Armor Slot
+            const armorSlot = document.createElement('div');
+            armorSlot.className = 'inv-slot filled';
+            armorSlot.style.cssText = 'display:inline-flex; flex-direction:column; align-items:center; padding:4px; background:#222; border:1px solid #444; border-radius:4px; min-width:60px;';
+            const armor = h.equipment?.armor;
+            armorSlot.innerHTML = `
+                <span style="font-size:16px;">🛡️</span>
+                <span style="font-size:8px; color:#87ceeb;">${armor?.name || 'None'}</span>
+                <span style="font-size:7px; color:#888;">+${armor?.defense || 0} DEF</span>
+            `;
+            armorSlot.title = armor ? `${armor.name}\n${armor.description}` : 'No armor';
+            invEl.appendChild(armorSlot);
+
             // Add Belt label
             const beltLabel = document.createElement('div');
-            beltLabel.style.cssText = 'font-size:10px; color:#888; margin-bottom:4px;';
-            beltLabel.innerText = 'BELT (Quick Use)';
+            beltLabel.style.cssText = 'font-size:10px; color:#888; margin-bottom:4px; margin-top:8px; border-bottom:1px solid #444; padding-bottom:4px;';
+            beltLabel.innerText = 'BELT (Potions)';
             invEl.appendChild(beltLabel);
 
             // Potion Slot 1
@@ -348,10 +421,46 @@ export class UIManager {
             statsEl.innerHTML = `
                 <div class="stat-item"><span>Speed</span> <span class="stat-val">${Math.floor(npc.speed || 50)}</span></div>
                 <div class="stat-item"><span>DMG</span> <span class="stat-val">${Math.floor(npc.damage || 0)}</span></div>
-                <div class="stat-item"><span>Dodge</span> <span class="stat-val">${((npc.dodgeChance||0)*100).toFixed(0)}%</span></div>
-                <div class="stat-item"><span>Parry</span> <span class="stat-val">${((npc.parryChance||0)*100).toFixed(0)}%</span></div>
-                <div class="stat-item"><span>Resist</span> <span class="stat-val">${((npc.resistPct||0)*100).toFixed(0)}%</span></div>
+                <div class="stat-item"><span>Dodge</span> <span class="stat-val">${((npc.dodgeChance || 0) * 100).toFixed(0)}%</span></div>
+                <div class="stat-item"><span>Parry</span> <span class="stat-val">${((npc.parryChance || 0) * 100).toFixed(0)}%</span></div>
+                <div class="stat-item"><span>Resist</span> <span class="stat-val">${((npc.resistPct || 0) * 100).toFixed(0)}%</span></div>
             `;
+        }
+    }
+
+    updateTaxCollectorData(tc) {
+        const nameEl = document.getElementById('mon-name');
+        if (nameEl) nameEl.innerText = tc.name || 'Tax Collector';
+        const typeEl = document.getElementById('mon-type');
+        if (typeEl) typeEl.innerText = 'NPC';
+        const hpText = document.getElementById('mon-hp-text');
+        if (hpText) hpText.innerText = `${Math.floor(tc.hp)}/${Math.floor(tc.maxHp)}`;
+        const hpBar = document.getElementById('mon-hp-bar');
+        if (hpBar) { hpBar.style.width = (tc.hp / tc.maxHp) * 100 + '%'; hpBar.style.background = '#ffd700'; }
+        const portrait = document.getElementById('mon-portrait');
+        if (portrait) portrait.style.backgroundColor = tc.color;
+        const statsEl = document.getElementById('mon-stats');
+        if (statsEl) {
+            statsEl.innerHTML = `
+                <div class="stat-item"><span>Carrying</span> <span class="stat-val">${Math.floor(tc.carriedGold)}g</span></div>
+                <div class="stat-item"><span>State</span> <span class="stat-val" style="font-size:9px;">${tc.state}</span></div>
+                <div style="margin-top:8px; font-size:10px; color:#888;">SETTINGS</div>
+                <div class="stat-item" style="margin-top:4px;">
+                    <span>Min Pickup</span>
+                    <input type="number" id="tc-collect-threshold" value="${tc.collectThreshold}" 
+                        style="width:45px; background:#222; border:1px solid #555; color:white; text-align:right; padding:2px;" />
+                </div>
+                <div class="stat-item">
+                    <span>Max Carry</span>
+                    <input type="number" id="tc-max-carry" value="${tc.maxCarry}" 
+                        style="width:45px; background:#222; border:1px solid #555; color:white; text-align:right; padding:2px;" />
+                </div>
+            `;
+            // Attach input listeners
+            const collectInput = document.getElementById('tc-collect-threshold');
+            const carryInput = document.getElementById('tc-max-carry');
+            if (collectInput) collectInput.onchange = (e) => { tc.collectThreshold = parseInt(e.target.value) || 20; };
+            if (carryInput) carryInput.onchange = (e) => { tc.maxCarry = parseInt(e.target.value) || 100; };
         }
     }
 
@@ -367,6 +476,24 @@ export class UIManager {
         if (!b.constructed) extraInfo = `Constructing: ${pct}%`;
         else if (b.hp < b.maxHp) extraInfo = `Repairing: ${pct}%`;
         else if (b.type === 'MARKET') extraInfo = `Trade Volume: ${b.heroesNearby || 0} heroes`;
+
+        if (b.type === 'GUILD') {
+            const rqPanel = document.getElementById('bld-recruit');
+            if (rqPanel) {
+                if (b.constructed) {
+                    rqPanel.style.opacity = '1.0';
+                    rqPanel.style.pointerEvents = 'auto';
+                } else {
+                    rqPanel.style.opacity = '0.5';
+                    rqPanel.style.pointerEvents = 'none';
+                }
+            }
+        }
+
+        // ECONOMY: Show treasury
+        if (b.treasury !== undefined && b.treasury > 0) {
+            extraInfo += `<div style="color:gold; margin-top:5px;">Treasury: ${Math.floor(b.treasury)}/${b.maxTreasury}g</div>`;
+        }
         document.getElementById('bld-stats').innerHTML = extraInfo;
 
         // VISITOR LIST
@@ -376,23 +503,53 @@ export class UIManager {
         if (vList) {
             const key = b.id || b.name || 'building';
             vList.dataset.buildingId = key;
-            if (b.visitors && b.visitors.length > 0) {
-                const frag = document.createDocumentFragment();
-                b.visitors.forEach(hero => {
-                    const row = document.createElement('div');
-                    row.className = 'visitor-row';
-                    row.innerHTML = `<span>${hero.name}</span> <span class="v-hp" style="font-size:9px; color:#888;">(${Math.floor(hero.hp)}hp)</span>`;
-                    frag.appendChild(row);
-                });
-                vList.replaceChildren(frag);
-            } else {
-                vList.replaceChildren();
-                const empty = document.createElement('div');
-                empty.style.padding = '5px';
-                empty.style.color = '#555';
-                empty.style.fontStyle = 'italic';
-                empty.textContent = 'No visitors.';
-                vList.appendChild(empty);
+
+            // Create a fingerprint to detect changes
+            const visitorFingerprint = b.visitors ? b.visitors.map(h => `${h.name}:${Math.floor(h.hp)}`).join(',') : '';
+
+            // Only re-render if visitors changed
+            if (vList.dataset.lastFingerprint !== visitorFingerprint) {
+                vList.dataset.lastFingerprint = visitorFingerprint;
+
+                if (b.visitors && b.visitors.length > 0) {
+                    const frag = document.createDocumentFragment();
+                    b.visitors.forEach((hero, idx) => {
+                        const row = document.createElement('div');
+                        row.className = 'visitor-row';
+                        row.style.display = 'flex';
+                        row.style.alignItems = 'center';
+                        row.style.justifyContent = 'space-between';
+                        row.style.padding = '4px 8px';
+                        row.style.borderBottom = '1px solid #333';
+
+                        const info = document.createElement('span');
+                        info.innerHTML = `${hero.name} <span style="font-size:9px; color:#888;">(${Math.floor(hero.hp)}hp)</span>`;
+
+                        const btn = document.createElement('button');
+                        btn.innerHTML = '🔍';
+                        btn.title = 'Inspect';
+                        btn.style.cssText = 'background:#444; border:1px solid #666; color:white; padding:2px 6px; cursor:pointer; border-radius:3px; font-size:10px;';
+                        btn.onmouseenter = () => { btn.style.background = '#666'; };
+                        btn.onmouseleave = () => { btn.style.background = '#444'; };
+                        btn.onclick = (e) => {
+                            e.stopPropagation();
+                            this.select(hero);
+                        };
+
+                        row.appendChild(info);
+                        row.appendChild(btn);
+                        frag.appendChild(row);
+                    });
+                    vList.replaceChildren(frag);
+                } else {
+                    vList.replaceChildren();
+                    const empty = document.createElement('div');
+                    empty.style.padding = '5px';
+                    empty.style.color = '#555';
+                    empty.style.fontStyle = 'italic';
+                    empty.textContent = 'No visitors.';
+                    vList.appendChild(empty);
+                }
             }
         }
 

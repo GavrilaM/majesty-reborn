@@ -2,7 +2,7 @@ import { Utils } from '../utils.js';
 import { Projectile } from './Projectile.js';
 import { Particle } from './Particle.js';
 import { BUILDING_CONFIG } from '../config/BuildingConfig.js';
-import { ITEM_CONFIG } from '../config/ItemConfig.js';
+import { ITEM_CONFIG, EQUIPMENT } from '../config/ItemConfig.js';
 import { DebugLogger } from '../systems/DebugLogger.js';
 import { GameLogger } from '../systems/GameLogger.js';
 
@@ -34,6 +34,10 @@ export class EconomicBuilding {
         this.isUnderConstruction = !this.constructed;
         this.opacity = 1.0;
         this.targetOpacity = 1.0;
+
+        // ECONOMY: Building Treasury
+        this.treasury = 0;
+        this.maxTreasury = config.maxTreasury || 200; // Default cap
     }
 
     update(dt, game) {
@@ -67,6 +71,7 @@ export class EconomicBuilding {
 
         if (this.constructed && this.type === 'TOWER') this.updateTowerDefense(dt, game);
         if (this.constructed && this.type === 'MARKET') this.updateMarketTrade(dt, game);
+        if (this.constructed && this.type === 'BLACKSMITH') this.updateBlacksmith(dt, game);
 
         const margin = 8;
         const x1 = this.x - this.width / 2 - margin;
@@ -157,10 +162,9 @@ export class EconomicBuilding {
             if (success) {
                 purchaseCount++;
 
-                // Player gets tax profit
-                if (this.game) {
-                    this.game.gold += playerProfit;
-                }
+                // ECONOMY: Profit goes to Market treasury (not directly to player)
+                const profit = playerProfit;
+                this.treasury = Math.min(this.treasury + profit, this.maxTreasury);
             } else {
                 // Belt is full (shouldn't happen due to while condition, but safety check)
                 break;
@@ -242,6 +246,82 @@ export class EconomicBuilding {
                 }
             }
         }
+    }
+
+    updateBlacksmith(dt, game) {
+        // Hero visitors inside the blacksmith get offered equipment upgrades
+        for (const hero of this.visitors) {
+            if (!hero || hero.remove || !hero.equipment) continue;
+
+            // Find available upgrade for this hero
+            const upgrade = this.findBestUpgrade(hero);
+            if (upgrade) {
+                if (hero.gold >= upgrade.cost) {
+                    // Purchase upgrade
+                    hero.gold -= upgrade.cost;
+
+                    // Apply upgrade
+                    if (upgrade.type === 'WEAPON') {
+                        hero.equipment.weapon = upgrade;
+                    } else if (upgrade.type === 'ARMOR') {
+                        hero.equipment.armor = upgrade;
+                        // Recalculate max HP with new armor
+                        const armorHpBonus = upgrade.hp || 0;
+                        const oldMaxHp = hero.maxHp;
+                        hero.maxHp = hero.stats.derived.maxHP + armorHpBonus;
+                        hero.hp = Math.min(hero.hp, hero.maxHp);
+                    }
+
+                    // Blacksmith gets profit
+                    const profit = Math.floor(upgrade.cost * 0.2);
+                    this.treasury = Math.min(this.treasury + profit, this.maxTreasury);
+
+                    // Visual feedback
+                    game.entities.push(new Particle(this.x, this.y - 40, `${hero.name}: ${upgrade.name}!`, '#ffd700'));
+                }
+            }
+        }
+    }
+
+    findBestUpgrade(hero) {
+        const heroClass = hero.type;
+        const currentWeaponTier = hero.equipment.weapon?.tier || 0;
+        const currentArmorTier = hero.equipment.armor?.tier || 0;
+
+        let bestUpgrade = null;
+        let bestValue = 0; // Higher tier = better
+
+        // Find weapon upgrades
+        for (const key of Object.keys(EQUIPMENT)) {
+            const item = EQUIPMENT[key];
+            if (item.type === 'WEAPON') {
+                // Check if class matches or no class requirement
+                const classMatches = !item.classReq || item.classReq === heroClass;
+                if (classMatches && item.tier > currentWeaponTier && item.tier <= currentWeaponTier + 1) {
+                    if (item.tier > bestValue && hero.gold >= item.cost) {
+                        bestUpgrade = item;
+                        bestValue = item.tier;
+                    }
+                }
+            }
+        }
+
+        // If no weapon upgrade, try armor
+        if (!bestUpgrade) {
+            for (const key of Object.keys(EQUIPMENT)) {
+                const item = EQUIPMENT[key];
+                if (item.type === 'ARMOR') {
+                    if (item.tier > currentArmorTier && item.tier <= currentArmorTier + 1) {
+                        if (item.tier > bestValue && hero.gold >= item.cost) {
+                            bestUpgrade = item;
+                            bestValue = item.tier;
+                        }
+                    }
+                }
+            }
+        }
+
+        return bestUpgrade;
     }
 
     takeDamage(amount, game, source = null) { if (source && source.remove) return; this.hp -= amount; }

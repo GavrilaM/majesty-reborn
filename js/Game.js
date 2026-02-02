@@ -10,7 +10,9 @@ import { UIManager } from './managers/UIManager.js';
 import { BuildManager } from './managers/BuildManager.js';
 import { Worker } from './entities/Worker.js';
 import { CastleGuard } from './entities/CastleGuard.js';
+import { TaxCollector } from './entities/TaxCollector.js';
 import { Utils } from './utils.js';
+import { WAVES, WAVE_CONFIG } from './config/WaveConfig.js';
 
 class Game {
     constructor() {
@@ -32,6 +34,14 @@ class Game {
         this.flowCell = 64;
         this.flowCache = new Map(); // key -> { vecX, vecY, cols, rows, ox, oy, cell, ts }
         this.npcRespawns = [];
+
+        // WAVE SYSTEM
+        this.waveState = 'BUILD'; // BUILD, COMBAT, VICTORY, DEFEAT
+        this.currentWave = 0;     // 0 = before wave 1
+        this.waveTimer = WAVE_CONFIG.initialBuildTime;
+        this.waveSpawnQueue = []; // Enemies queued to spawn
+        this.spawnTimer = 0;
+
         this.resize();
         window.addEventListener('resize', () => this.resize());
         this.mouseX = 0;
@@ -60,6 +70,9 @@ class Game {
             const g = new CastleGuard(c.x - 40 + i * 30, c.y + 40);
             this.entities.push(g);
         }
+        // Tax Collector
+        const tc = new TaxCollector(c.x + 50, c.y + 50);
+        this.entities.push(tc);
     }
 
     queueNpcRespawn(type, delay = 15) {
@@ -244,7 +257,7 @@ class Game {
         const candidates = this.entities.filter(ent => {
             if (ent instanceof Hero) return Utils.dist(x, y, ent.x, ent.y) < ent.radius + 10;
             if (ent.constructor.name === 'Monster') return Utils.dist(x, y, ent.x, ent.y) < ent.radius + 10;
-            if (ent.constructor.name === 'Worker' || ent.constructor.name === 'CastleGuard') return Utils.dist(x, y, ent.x, ent.y) < (ent.radius || 12) + 10;
+            if (ent.constructor.name === 'Worker' || ent.constructor.name === 'CastleGuard' || ent.constructor.name === 'TaxCollector') return Utils.dist(x, y, ent.x, ent.y) < (ent.radius || 12) + 10;
             if (ent instanceof EconomicBuilding) return Math.abs(x - ent.x) < ent.width / 2 + 5 && Math.abs(y - ent.y) < ent.height / 2 + 5;
             return false;
         });
@@ -287,9 +300,8 @@ class Game {
         this.taxTimer -= dt;
         if (this.taxTimer <= 0) {
             this.taxTimer = this.taxInterval;
-            let income = 25;
-            this.gold += income;
-            this.entities.push(new Particle(this.castle.x, this.castle.y - 60, `+${income}g`, "yellow"));
+            // Passive income removed from Castle.
+            // Guilds now generate passive income.
         }
 
         // Recompute obstacles occasionally to handle new buildings
@@ -327,39 +339,147 @@ class Game {
                     const c = this.castle;
                     if (r.type === 'Worker') this.entities.push(new Worker(c.x + 30, c.y + 60));
                     else if (r.type === 'CastleGuard') this.entities.push(new CastleGuard(c.x - 40, c.y + 40));
+                    else if (r.type === 'TaxCollector') this.entities.push(new TaxCollector(c.x + 50, c.y + 50));
                     this.entities.push(new Particle(c.x, c.y - 50, `${r.type} ready`, 'lime'));
                     this.npcRespawns.splice(i, 1);
                 }
             }
         }
 
-        if (this.castle.hp <= 0) { this.endGame(); return; }
-        // DEBUG: Reduced spawn rate and added initial delay for testing
-        // No monsters spawn in first 30 seconds to allow building/recruiting
-        if (this.gameTime > 30 && Math.random() < 0.002) {
-            const x = Math.random() < 0.5 ? 0 : this.canvas.width;
-            const y = Math.random() * this.canvas.height;
-
-            // Weighted Spawn Pool:
-            // 50% Swarm (Goblin)
-            // 30% Ranged (Ratman)
-            // 15% Tank (Ogre)
-            // 5% Siege (Minotaur)
-            const roll = Math.random();
-            let type = 'SWARM';
-            if (roll < 0.5) type = 'SWARM';
-            else if (roll < 0.8) type = 'RANGED';
-            else if (roll < 0.95) type = 'TANK';
-            else type = 'SIEGE';
-
-            this.entities.push(new Monster(x, y, type));
+        if (this.castle.hp <= 0) {
+            this.waveState = 'DEFEAT';
+            this.endGame();
+            return;
         }
+
+        // WAVE SYSTEM UPDATE
+        this.updateWave(dt);
+
         this.entities.forEach(e => e.update(dt, this));
         this.entities.forEach(e => { if (typeof e.integrate === 'function') e.integrate(dt, this); });
         // Global hard collision resolution pass
         this.resolveCollisions();
         this.entities = this.entities.filter(e => !e.remove);
         this.ui.update(dt);
+    }
+
+    updateWave(dt) {
+        if (this.waveState === 'VICTORY' || this.waveState === 'DEFEAT') return;
+
+        // BUILD PHASE - Countdown to next wave
+        if (this.waveState === 'BUILD') {
+            this.waveTimer -= dt;
+            if (this.waveTimer <= 0) {
+                this.startNextWave();
+            }
+            return;
+        }
+
+        // COMBAT PHASE - Spawn queued enemies and check for wave clear
+        if (this.waveState === 'COMBAT') {
+            // Spawn enemies from queue
+            if (this.waveSpawnQueue.length > 0) {
+                this.spawnTimer -= dt;
+                if (this.spawnTimer <= 0) {
+                    const type = this.waveSpawnQueue.shift();
+                    this.spawnWaveEnemy(type);
+                    this.spawnTimer = WAVE_CONFIG.spawnDelay;
+                }
+            }
+
+            // Check if wave is clear (no monsters left and queue empty)
+            const monstersAlive = this.entities.filter(e =>
+                e.constructor.name === 'Monster' && !e.remove && e.hp > 0
+            ).length;
+
+            if (monstersAlive === 0 && this.waveSpawnQueue.length === 0) {
+                this.onWaveClear();
+            }
+        }
+    }
+
+    startNextWave() {
+        this.currentWave++;
+
+        if (this.currentWave > WAVE_CONFIG.totalWaves) {
+            // All waves complete - VICTORY!
+            this.waveState = 'VICTORY';
+            this.entities.push(new Particle(this.castle.x, this.castle.y - 100, "VICTORY!", "gold"));
+            return;
+        }
+
+        const waveData = WAVES[this.currentWave - 1];
+        this.waveState = 'COMBAT';
+
+        // Build spawn queue
+        this.waveSpawnQueue = [];
+        for (const group of waveData.enemies) {
+            for (let i = 0; i < group.count; i++) {
+                this.waveSpawnQueue.push(group.type);
+            }
+        }
+        // Shuffle queue for variety
+        this.waveSpawnQueue.sort(() => Math.random() - 0.5);
+
+        this.spawnTimer = 0; // Spawn first enemy immediately
+        this.entities.push(new Particle(this.castle.x, this.castle.y - 80, `Wave ${this.currentWave}!`, "red"));
+    }
+
+    spawnWaveEnemy(type) {
+        // Spawn from edge of screen
+        const side = Math.floor(Math.random() * 4); // 0=top, 1=right, 2=bottom, 3=left
+        let x, y;
+        const spread = 50;
+
+        switch (side) {
+            case 0: // Top
+                x = Math.random() * this.canvas.width;
+                y = -20;
+                break;
+            case 1: // Right
+                x = this.canvas.width + 20;
+                y = Math.random() * this.canvas.height;
+                break;
+            case 2: // Bottom
+                x = Math.random() * this.canvas.width;
+                y = this.canvas.height + 20;
+                break;
+            case 3: // Left
+                x = -20;
+                y = Math.random() * this.canvas.height;
+                break;
+        }
+
+        // SWARM spawns in small groups
+        if (type === 'SWARM') {
+            const count = Utils.rand(2, 3);
+            for (let i = 0; i < count; i++) {
+                const sx = x + Utils.rand(-spread, spread);
+                const sy = y + Utils.rand(-spread, spread);
+                this.entities.push(new Monster(sx, sy, 'SWARM'));
+            }
+        } else {
+            this.entities.push(new Monster(x, y, type));
+        }
+    }
+
+    onWaveClear() {
+        const waveData = WAVES[this.currentWave - 1];
+        const bonus = waveData?.bonus || 50;
+
+        this.gold += bonus;
+        this.entities.push(new Particle(this.castle.x, this.castle.y - 60, `Wave Clear! +${bonus}g`, "lime"));
+
+        // Check if more waves
+        if (this.currentWave >= WAVE_CONFIG.totalWaves) {
+            this.waveState = 'VICTORY';
+            this.entities.push(new Particle(this.castle.x, this.castle.y - 100, "VICTORY!", "gold"));
+        } else {
+            // Start build phase
+            const nextWave = WAVES[this.currentWave];
+            this.waveState = 'BUILD';
+            this.waveTimer = nextWave?.buildTime || 30;
+        }
     }
 
     resolveCollisions() {

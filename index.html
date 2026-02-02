@@ -1,18 +1,20 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Majesty Reborn</title>
     <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
 
     <div id="app-container">
-        
+
         <!-- SIDEBAR -->
         <aside id="sidebar">
-            
+
             <!-- 1. MINIMAP -->
             <div class="sidebar-section" id="minimap-container">
                 <canvas id="minimapCanvas" width="220" height="120"></canvas>
@@ -21,7 +23,7 @@
 
             <!-- 2. INSPECTOR WINDOW -->
             <div class="sidebar-section" id="inspector-window">
-                
+
                 <!-- STATE 1: NOTHING SELECTED -->
                 <div id="view-empty" class="empty-state">
                     <p>The Realm is quiet.</p>
@@ -37,7 +39,7 @@
                             <div class="hero-level" id="insp-lvl">Lv. 1</div>
                         </div>
                     </div>
-                    
+
                     <div class="stat-bar-container">
                         <div style="background:#444; height:4px; margin:5px 0;">
                             <div id="insp-hp-bar" style="width:100%; height:100%; background:lime;"></div>
@@ -47,14 +49,15 @@
                         <div style="background:#333; height:4px; margin:5px 0;">
                             <div id="insp-stamina-bar" style="width:100%; height:100%; background:#00bfff;"></div>
                         </div>
-                        <div style="text-align:right; font-size:10px; color:#8fd3ff;" id="insp-stamina-text">100/100</div>
+                        <div style="text-align:right; font-size:10px; color:#8fd3ff;" id="insp-stamina-text">100/100
+                        </div>
                         <!-- XP BAR -->
                         <div style="background:#333; height:4px; margin:5px 0;">
                             <div id="insp-xp-bar" style="width:0%; height:100%; background:#a890ff;"></div>
                         </div>
                         <div style="text-align:right; font-size:10px; color:#c9b8ff;" id="insp-xp-text">0%</div>
                     </div>
-                    
+
                     <!-- TABS -->
                     <div class="tab-container" style="margin-top:10px; display:flex; gap:5px;">
                         <button id="tab-btn-stats" class="tab-btn active" style="flex:1; cursor:pointer;">Stats</button>
@@ -65,7 +68,8 @@
                     <!-- CONTENT STATS -->
                     <div id="content-stats" class="tab-content">
                         <div class="attr-grid" id="insp-attributes" style="margin-top:10px;"></div>
-                        <div style="margin-top:10px; font-style:italic; color:#aaa; font-size:11px;" id="insp-state">State</div>
+                        <div style="margin-top:10px; font-style:italic; color:#aaa; font-size:11px;" id="insp-state">
+                            State</div>
                     </div>
 
                     <!-- CONTENT ITEMS (NEW) -->
@@ -83,8 +87,9 @@
                         <div id="insp-history" style="margin-top:10px; font-size:11px;"></div>
                         <div id="insp-skills" style="margin-top:10px;"></div>
                     </div>
-                    
-                    <button id="btn-deselect" style="width:100%; margin-top:10px; background:#333; color:#ccc; border:none; cursor:pointer;">Close</button>
+
+                    <button id="btn-deselect"
+                        style="width:100%; margin-top:10px; background:#333; color:#ccc; border:none; cursor:pointer;">Close</button>
                 </div>
 
                 <!-- STATE 3: BUILDING SELECTED -->
@@ -102,11 +107,14 @@
                         </div>
                         <div style="text-align:right; font-size:10px;" id="bld-hp-text">500/500</div>
                     </div>
-                    <p id="bld-desc" style="font-size:11px; color:#ccc; margin-top:10px; font-style:italic; padding: 5px; background: rgba(0,0,0,0.2);">Description...</p>
+                    <p id="bld-desc"
+                        style="font-size:11px; color:#ccc; margin-top:10px; font-style:italic; padding: 5px; background: rgba(0,0,0,0.2);">
+                        Description...</p>
                     <div id="bld-stats" style="margin-top:10px; font-size:11px; color: gold;"></div>
                     <!-- RECRUITMENT PANEL -->
                     <div id="bld-recruit" style="margin-top:10px;">
-                        <div style="font-size:10px; color:#888; border-bottom:1px solid #444; margin-bottom:6px;">RECRUITMENT</div>
+                        <div style="font-size:10px; color:#888; border-bottom:1px solid #444; margin-bottom:6px;">
+                            RECRUITMENT</div>
                         <div style="display:flex; gap:6px; margin-bottom:6px;">
                             <button id="bld-btn-warrior" class="tab-btn" style="flex:1;">RECRUIT Warrior (200g)</button>
                             <button id="bld-btn-ranger" class="tab-btn" style="flex:1;">RECRUIT Ranger (350g)</button>
@@ -116,10 +124,11 @@
                         </div>
                         <div id="bld-recruit-text" style="text-align:right; font-size:10px; color:#ccc;">Idle</div>
                     </div>
-                    
+
                     <!-- NEW VISITOR CONTAINER -->
                     <div id="bld-visitors-container" style="margin-top:10px;">
-                        <div style="font-size:10px; color:#888; border-bottom:1px solid #444; margin-bottom:4px;">VISITORS</div>
+                        <div style="font-size:10px; color:#888; border-bottom:1px solid #444; margin-bottom:4px;">
+                            VISITORS</div>
                         <div id="bld-visitor-list" class="visitor-list"></div>
                     </div>
                 </div>
@@ -139,7 +148,7 @@
                         </div>
                         <div style="text-align:right; font-size:10px;" id="mon-hp-text">100/100</div>
                     </div>
-                    
+
                     <div id="mon-stats" class="attr-grid" style="margin-top:10px;">
                         <!-- Injected by JS -->
                     </div>
@@ -160,10 +169,11 @@
         <!-- MAIN VIEW -->
         <main id="main-view">
             <div id="top-bar">
-                <span>Day 1</span>
+                <span id="wave-display" style="color:#ff6b6b; font-weight:bold;">Prepare!</span>
                 <span style="color:gold; font-weight:bold;">👑 <span id="gold-display">500</span>g</span>
                 <span id="game-msg">Welcome, Majesty.</span>
-                <button id="btn-debug" style="margin-left:10px; font-size:10px; padding:3px 6px; cursor:pointer;">DEBUG OFF</button>
+                <button id="btn-debug" style="margin-left:10px; font-size:10px; padding:3px 6px; cursor:pointer;">DEBUG
+                    OFF</button>
             </div>
             <canvas id="gameCanvas"></canvas>
         </main>
@@ -173,17 +183,19 @@
     <!-- OVERLAYS -->
     <div id="game-over-screen" class="hidden">
         <h1>KINGDOM FALLEN</h1>
-        <button onclick="location.reload()" style="font-size:20px; padding:10px 20px; cursor:pointer;">Try Again</button>
+        <button onclick="location.reload()" style="font-size:20px; padding:10px 20px; cursor:pointer;">Try
+            Again</button>
     </div>
 
     <!-- ERROR POPUP -->
-    <div id="error-popup" style="display:none; position:fixed; top:10px; left:10px; background:red; color:white; padding:20px; z-index:10000; font-family:monospace;">
+    <div id="error-popup"
+        style="display:none; position:fixed; top:10px; left:10px; background:red; color:white; padding:20px; z-index:10000; font-family:monospace;">
         <h3>CRITICAL ERROR</h3>
         <p id="error-msg">Unknown Error</p>
     </div>
 
     <script>
-        window.onerror = function(msg, url, line) {
+        window.onerror = function (msg, url, line) {
             document.getElementById('error-popup').style.display = 'block';
             document.getElementById('error-msg').innerText = `${msg}\n\nAt: ${url}:${line}\n\nCheck console (F12).`;
         };
@@ -191,4 +203,5 @@
 
     <script type="module" src="./js/Game.js"></script>
 </body>
+
 </html>

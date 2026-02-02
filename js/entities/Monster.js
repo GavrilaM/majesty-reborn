@@ -70,21 +70,10 @@ export class Monster {
         this.gatherTimer = 0;
         this.projectileColor = config.projectileColor || '#ff0000';
 
-        this.initSwarm();
+        this.projectileColor = config.projectileColor || '#ff0000';
     }
 
-    initSwarm() {
-        // 40% chance for SWARM types to gather first
-        if (this.behavior === 'SWARM' && Math.random() < 0.4) {
-            this.state = 'GATHER';
-            this.gatherTimer = Utils.rand(10, 20); // Wait 10-20 seconds max
-            // Pick a gather point 300-500px from spawn (or castle)
-            this.gatherPoint = {
-                x: this.x + Utils.rand(-200, 200),
-                y: this.y + Utils.rand(-200, 200)
-            };
-        }
-    }
+
 
     update(dt, game) {
         if (this.hp <= 0 || this.remove) {
@@ -124,11 +113,8 @@ export class Monster {
             this.engagedLockTimer -= dt;
         }
 
-        // SWARM BEHAVIOR: GATHER STATE
-        if (this.state === 'GATHER') {
-            this.updateGather(dt, game);
-            return;
-        }
+        // SWARM BEHAVIOR: GATHER STATE (REMOVED - Now using Group Spawn + Cohesion)
+        // Groups spawn together and naturally flock via maintainSpace
 
         // EARLY TARGET VALIDATION - Clear dead/removed targets immediately
         if (this.target) {
@@ -429,6 +415,9 @@ export class Monster {
     maintainSpace(entities, dt) {
         this.moveBlocked = false;
         let sepX = 0, sepY = 0;
+        let cohX = 0, cohY = 0; // Cohesion
+        let swarmCount = 0;
+
         entities.forEach(e => {
             if (e === this || e.remove) return;
             const isUnit = e.constructor.name === 'Monster' || e.constructor.name === 'Hero' || e.constructor.name === 'Worker' || e.constructor.name === 'CastleGuard';
@@ -436,6 +425,8 @@ export class Monster {
                 if (e.visible === false) return;
                 const dist = Utils.dist(this.x, this.y, e.x, e.y);
                 const minGap = this.radius + e.radius;
+
+                // SEPARATION
                 if (dist < minGap && dist > 0) {
                     const nx = (this.x - e.x) / dist;
                     const ny = (this.y - e.y) / dist;
@@ -446,6 +437,15 @@ export class Monster {
                     sepX += nx * overlap * scale;
                     sepY += ny * overlap * scale;
                 }
+
+                // COHESION (For Swarm types)
+                if (this.behavior === 'SWARM' && e.constructor.name === 'Monster' && e.behavior === 'SWARM' && dist < 200) {
+                    cohX += e.x;
+                    cohY += e.y;
+                    swarmCount++;
+                }
+
+                // Blocking detection
                 const fx = this.target ? this.target.x : this.x;
                 const fy = this.target ? this.target.y : this.y;
                 const dir = Utils.normalize(fx - this.x, fy - this.y);
@@ -478,8 +478,27 @@ export class Monster {
                 }
             }
         });
+
+        // Apply Separation
         this.acc.x += sepX;
         this.acc.y += sepY;
+
+        // Apply Cohesion (Steer towards center of swarm)
+        if (swarmCount > 0 && !this.target) { // Only cohere if idle/wandering? Or always?
+            // Let's say always, but weaker if targeting
+            const centerX = cohX / swarmCount;
+            const centerY = cohY / swarmCount;
+            const dx = centerX - this.x;
+            const dy = centerY - this.y;
+            const dist = Math.hypot(dx, dy);
+            if (dist > 10) { // Don't jitter at center
+                const dirX = dx / dist;
+                const dirY = dy / dist;
+                const cohStrength = this.target ? 20 : 50; // Stronger if no target
+                this.acc.x += dirX * cohStrength * dt;
+                this.acc.y += dirY * cohStrength * dt;
+            }
+        }
     }
 
     integrate(dt, game) {
@@ -516,50 +535,7 @@ export class Monster {
         this.acc.x = 0; this.acc.y = 0;
     }
 
-    updateGather(dt, game) {
-        this.gatherTimer -= dt;
-        if (this.gatherTimer <= 0) {
-            this.state = 'HUNT';
-            return;
-        }
 
-        // 1. Move to gather point
-        const dist = Utils.dist(this.x, this.y, this.gatherPoint.x, this.gatherPoint.y);
-        if (dist > 50) {
-            // Move towards gather point
-            const dx = this.gatherPoint.x - this.x;
-            const dy = this.gatherPoint.y - this.y;
-            const angle = Math.atan2(dy, dx);
-            this.acc.x += Math.cos(angle) * this.speed * 4; // Use acceleration
-            this.acc.y += Math.sin(angle) * this.speed * 4;
-        } else {
-            // 2. Nervous Idle (Random jitter)
-            if (Math.random() < 0.05) {
-                const jitterAngle = Math.random() * Math.PI * 2;
-                this.acc.x += Math.cos(jitterAngle) * this.speed * 5;
-                this.acc.y += Math.sin(jitterAngle) * this.speed * 5;
-            }
-        }
-
-        // 3. Check for friends
-        if (Math.floor(this.gatherTimer) !== Math.floor(this.gatherTimer + dt)) {
-            let allies = 0;
-            const checkRadius = 150;
-            for (const e of game.entities) {
-                if (e.constructor.name === 'Monster' &&
-                    e !== this &&
-                    e.behavior === 'SWARM' &&
-                    Utils.dist(this.x, this.y, e.x, e.y) < checkRadius) {
-                    allies++;
-                }
-            }
-
-            if (allies >= this.swarmThreshold) {
-                this.state = 'HUNT';
-                game.entities.push(new Particle(this.x, this.y - 30, "ATTACK!", "red"));
-            }
-        }
-    }
 
     fireProjectile(game) {
         if (this.target) {

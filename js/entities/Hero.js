@@ -5,7 +5,7 @@ import { CLASS_CONFIG } from '../config/ClassConfig.js';
 import { Projectile } from './Projectile.js';
 import { Particle } from './Particle.js';
 import { ItemDrop } from './ItemDrop.js';
-import { ITEM_CONFIG } from '../config/ItemConfig.js';
+import { ITEM_CONFIG, EQUIPMENT, STARTING_EQUIPMENT } from '../config/ItemConfig.js';
 import { DebugLogger } from '../systems/DebugLogger.js';
 import { GameLogger } from '../systems/GameLogger.js';
 
@@ -43,8 +43,17 @@ export class Hero {
         this.inventory = new Inventory(); // Belt-based system (no capacity parameter)
         this.gold = 0;
 
-        this.hp = this.stats.derived.maxHP;
-        this.maxHp = this.stats.derived.maxHP;
+        // EQUIPMENT SYSTEM
+        const startingEquip = STARTING_EQUIPMENT[this.type] || STARTING_EQUIPMENT.WARRIOR;
+        this.equipment = {
+            weapon: EQUIPMENT[startingEquip.weapon] || null,
+            armor: EQUIPMENT[startingEquip.armor] || null
+        };
+
+        // Calculate max HP with armor bonus
+        const armorHpBonus = this.equipment.armor?.hp || 0;
+        this.hp = this.stats.derived.maxHP + armorHpBonus;
+        this.maxHp = this.stats.derived.maxHP + armorHpBonus;
         this.xp = 0;
         this.xpToNextLevel = 100;
 
@@ -333,8 +342,22 @@ export class Hero {
         if (this.patrolTimer <= 0) { this.state = 'DECISION'; }
     }
     findHome(game) {
+        // Prioritize Guilds
         let best = null;
         let minDist = Infinity;
+
+        // First pass: Look for Guilds
+        game.entities.forEach(e => {
+            if (e.constructor.name.includes('Guild') && !e.remove && e.constructed && e.hp > 0) {
+                const d = Utils.dist(this.x, this.y, e.x, e.y);
+                if (d < minDist) { minDist = d; best = e; }
+            }
+        });
+
+        if (best) return best;
+
+        // Second pass: Any EconomicBuilding
+        minDist = Infinity;
         game.entities.forEach(e => {
             if ((e.constructor.name === 'EconomicBuilding') && !e.remove && e.constructed && e.hp > 0) {
                 const d = Utils.dist(this.x, this.y, e.x, e.y);
@@ -462,7 +485,7 @@ export class Hero {
         if (this.gold >= 50 && !this.inventory.isBeltFull()) {
             if (game.gameTime - this.lastShopTime > 10) { // 10s cooldown
                 // Check if market exists
-                const hasMarket = game.entities.some(e => e.constructor.name === 'EconomicBuilding' && e.type === 'MARKET' && !e.remove);
+                const hasMarket = game.entities.some(e => e.constructor.name === 'EconomicBuilding' && e.type === 'MARKET' && e.constructed && !e.remove);
                 if (hasMarket && !dangerNearby) {
                     this.nextState = 'SHOP';
                     this.nextTarget = null; // Will find target in behaviorShop
@@ -473,6 +496,23 @@ export class Hero {
             }
         }
 
+        // BLACKSMITH CHECK - Visit to upgrade equipment if have enough gold
+        const weaponTier = this.equipment?.weapon?.tier || 0;
+        const armorTier = this.equipment?.armor?.tier || 0;
+        const minUpgradeCost = 80; // T2 equipment costs 80g
+        if (this.gold >= minUpgradeCost && (weaponTier < 4 || armorTier < 4)) {
+            if (game.gameTime - this.lastShopTime > 15) { // 15s cooldown for Blacksmith
+                const hasBlacksmith = game.entities.some(e => e.constructor.name === 'EconomicBuilding' && e.type === 'BLACKSMITH' && e.constructed && !e.remove);
+                if (hasBlacksmith && !dangerNearby) {
+                    this.nextState = 'SHOP';
+                    this.nextTarget = null;
+                    this.preferBlacksmith = true; // Flag to prefer Blacksmith in behaviorShop
+                    this.reactionTimer = Utils.rand(0.2, 0.7);
+                    game.entities.push(new Particle(this.x, this.y - 30, "⚔", "#ffd700"));
+                    return;
+                }
+            }
+        }
 
 
         // PERSONALITY: Find preferred target based on traits
@@ -730,9 +770,22 @@ export class Hero {
 
     behaviorShop(dt, game) {
         if (!this.target || this.target.remove) {
-            const markets = game.entities.filter(e => e.constructor.name === 'EconomicBuilding' && e.type === 'MARKET' && !e.remove);
-            if (markets.length === 0) { this.state = 'DECISION'; return; }
-            this.target = markets.sort((a, b) => Utils.dist(this.x, this.y, a.x, a.y) - Utils.dist(this.x, this.y, b.x, b.y))[0];
+            // Check if we prefer Blacksmith
+            if (this.preferBlacksmith) {
+                const blacksmiths = game.entities.filter(e => e.constructor.name === 'EconomicBuilding' && e.type === 'BLACKSMITH' && e.constructed && !e.remove);
+                if (blacksmiths.length > 0) {
+                    this.target = blacksmiths.sort((a, b) => Utils.dist(this.x, this.y, a.x, a.y) - Utils.dist(this.x, this.y, b.x, b.y))[0];
+                    this.preferBlacksmith = false; // Clear flag
+                } else {
+                    this.preferBlacksmith = false;
+                    this.state = 'DECISION';
+                    return;
+                }
+            } else {
+                const markets = game.entities.filter(e => e.constructor.name === 'EconomicBuilding' && e.type === 'MARKET' && e.constructed && !e.remove);
+                if (markets.length === 0) { this.state = 'DECISION'; return; }
+                this.target = markets.sort((a, b) => Utils.dist(this.x, this.y, a.x, a.y) - Utils.dist(this.x, this.y, b.x, b.y))[0];
+            }
         }
 
         const door = { x: this.target.x, y: this.target.y + (this.target.height / 2) - 5 };
@@ -892,8 +945,17 @@ export class Hero {
     }
 
     attack(game) {
-        let damage = this.stats.derived.meleeDamage;
-        if (Math.random() < this.stats.derived.critChance) { damage *= 2; game.entities.push(new Particle(this.x, this.y - 30, "CRIT!", "#ff00ff")); }
+        // EQUIPMENT: Add weapon damage bonus
+        const weaponDamage = this.equipment.weapon?.damage || 0;
+        const weaponCrit = this.equipment.weapon?.crit || 0;
+
+        let damage = this.stats.derived.meleeDamage + weaponDamage;
+        const critChance = this.stats.derived.critChance + weaponCrit;
+
+        if (Math.random() < critChance) {
+            damage *= 2;
+            game.entities.push(new Particle(this.x, this.y - 30, "CRIT!", "#ff00ff"));
+        }
         // Pass 'this' as source so monsters know who attacked them
         if (CLASS_CONFIG[this.type].isRanged) {
             game.entities.push(new Projectile(this.x, this.y, this.target, damage, this));
@@ -913,11 +975,23 @@ export class Hero {
 
     takeDamage(amount, game, source = null) {
         this.lastDamageTime = game.gameTime;
-        let dodge = this.stats.derived.dodgeChance;
+
+        // EQUIPMENT: Add armor dodge bonus
+        const armorDodge = this.equipment.armor?.dodge || 0;
+        let dodge = this.stats.derived.dodgeChance + armorDodge;
+
         if (this.skillActive && this.skillActive.dodgeBonus) dodge += this.skillActive.dodgeBonus;
         if (Math.random() < dodge) { if (game) game.entities.push(new Particle(this.x, this.y - 20, "DODGE", "cyan")); return; }
         if (Math.random() < this.stats.derived.parryChance) { amount *= 0.5; if (game) game.entities.push(new Particle(this.x, this.y - 20, "PARRY", "white")); }
-        if (this.stats.derived.physicalResist) { amount -= amount * this.stats.derived.physicalResist; }
+
+        // EQUIPMENT: Add armor defense (damage reduction)
+        const armorDefense = this.equipment.armor?.defense || 0;
+        const armorResist = this.equipment.armor?.resist || 0;
+        amount = Math.max(1, amount - armorDefense * 0.5); // Defense reduces damage
+
+        if (this.stats.derived.physicalResist || armorResist) {
+            amount -= amount * (this.stats.derived.physicalResist + armorResist);
+        }
         this.hp -= amount; this.history.timesWounded++;
         if (game) game.entities.push(new Particle(this.x, this.y - 20, "-" + Math.floor(amount), "red"));
         this.flashTimer = 0.06;
