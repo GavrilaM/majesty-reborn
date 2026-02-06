@@ -25,6 +25,13 @@ export class CastleGuard {
         this.visible = true;
         this.remove = false;
         this.walkPhase = 0;
+
+        // A* Pathfinding properties
+        this.currentPath = null;
+        this.waypointIndex = 0;
+        this.pathRefreshTimer = 0;
+        this.pathRefreshInterval = 1.5;
+        this.lastPathTarget = null;
     }
 
     update(dt, game) {
@@ -61,7 +68,7 @@ export class CastleGuard {
             this.patrolTimer = 3 + Math.random() * 4;
         }
         this.patrolTimer -= dt;
-        this.moveTowards(this.patrolTarget.x, this.patrolTarget.y, dt);
+        this.moveWithPathfinding(this.patrolTarget.x, this.patrolTarget.y, dt, game);
     }
 
     findNearestMonster(game, range) {
@@ -157,5 +164,52 @@ export class CastleGuard {
         this.x += this.vel.x * dt;
         this.y += this.vel.y * dt;
         this.acc.x = 0; this.acc.y = 0;
+    }
+
+    moveWithPathfinding(tx, ty, dt, game) {
+        if (!game.pathfinder) {
+            this.moveTowards(tx, ty, dt);
+            return;
+        }
+
+        const targetKey = `${Math.floor(tx)},${Math.floor(ty)}`;
+        const needsNewPath = !this.currentPath || this.lastPathTarget !== targetKey || this.pathRefreshTimer <= 0;
+
+        if (needsNewPath) {
+            const path = game.pathfinder.findPath(this.x, this.y, tx, ty);
+            if (path && path.length > 0) {
+                this.currentPath = path;
+                this.waypointIndex = 0;
+                this.lastPathTarget = targetKey;
+                this.pathRefreshTimer = this.pathRefreshInterval;
+            } else {
+                this.moveTowards(tx, ty, dt);
+                return;
+            }
+        }
+
+        this.pathRefreshTimer -= dt;
+
+        if (this.currentPath && this.waypointIndex < this.currentPath.length) {
+            const waypoint = this.currentPath[this.waypointIndex];
+            const distToWaypoint = Utils.dist(this.x, this.y, waypoint.x, waypoint.y);
+
+            if (distToWaypoint > 15) {
+                this.moveTowards(waypoint.x, waypoint.y, dt);
+            } else {
+                this.waypointIndex++;
+                if (this.waypointIndex >= this.currentPath.length) {
+                    this.moveTowards(tx, ty, dt);
+                }
+            }
+        } else {
+            this.moveTowards(tx, ty, dt);
+        }
+    }
+
+    clearPath() {
+        this.currentPath = null;
+        this.waypointIndex = 0;
+        this.lastPathTarget = null;
     }
 }

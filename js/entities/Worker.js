@@ -25,6 +25,13 @@ export class Worker {
         this.remove = false;
         this.restingBuilding = null;
         this.walkPhase = 0;
+
+        // A* Pathfinding properties
+        this.currentPath = null;
+        this.waypointIndex = 0;
+        this.pathRefreshTimer = 0;
+        this.pathRefreshInterval = 1.0;
+        this.lastPathTarget = null;
     }
 
     update(dt, game) {
@@ -67,12 +74,19 @@ export class Worker {
                 this.vel.x = 0; this.vel.y = 0;
                 this.acc.x = 0; this.acc.y = 0;
             } else {
-                this.moveTowards(workPoint.x, workPoint.y, dt);
+                this.moveWithPathfinding(workPoint.x, workPoint.y, dt, game);
             }
         } else if (this.state === 'BUILD') {
             if (this.target.constructed) { this.state = 'IDLE'; this.target = null; return; }
             this.target.hp = Math.min(this.target.maxHp, this.target.hp + this.buildRate * dt);
-            if (this.target.hp >= this.target.maxHp) { this.target.constructed = true; this.target.isUnderConstruction = false; }
+            if (this.target.hp >= this.target.maxHp) {
+                this.target.constructed = true;
+                this.target.isUnderConstruction = false;
+                // Mark building footprint on navigation grid
+                if (game.navGrid && this.target.width && this.target.height) {
+                    game.navGrid.markBlocked(this.target.x, this.target.y, this.target.width, this.target.height);
+                }
+            }
         } else if (this.state === 'REPAIR') {
             if (!this.target.constructed) { this.state = 'IDLE'; this.target = null; return; }
             if (this.target.hp >= this.target.maxHp) { this.state = 'IDLE'; this.target = null; return; }
@@ -204,5 +218,55 @@ export class Worker {
         this.x += this.vel.x * dt;
         this.y += this.vel.y * dt;
         this.acc.x = 0; this.acc.y = 0;
+    }
+
+    /**
+     * Move towards a target using A* pathfinding
+     */
+    moveWithPathfinding(tx, ty, dt, game) {
+        if (!game.pathfinder) {
+            this.moveTowards(tx, ty, dt);
+            return;
+        }
+
+        const targetKey = `${Math.floor(tx)},${Math.floor(ty)}`;
+        const needsNewPath = !this.currentPath || this.lastPathTarget !== targetKey || this.pathRefreshTimer <= 0;
+
+        if (needsNewPath) {
+            const path = game.pathfinder.findPath(this.x, this.y, tx, ty);
+            if (path && path.length > 0) {
+                this.currentPath = path;
+                this.waypointIndex = 0;
+                this.lastPathTarget = targetKey;
+                this.pathRefreshTimer = this.pathRefreshInterval;
+            } else {
+                this.moveTowards(tx, ty, dt);
+                return;
+            }
+        }
+
+        this.pathRefreshTimer -= dt;
+
+        if (this.currentPath && this.waypointIndex < this.currentPath.length) {
+            const waypoint = this.currentPath[this.waypointIndex];
+            const distToWaypoint = Utils.dist(this.x, this.y, waypoint.x, waypoint.y);
+
+            if (distToWaypoint > 15) {
+                this.moveTowards(waypoint.x, waypoint.y, dt);
+            } else {
+                this.waypointIndex++;
+                if (this.waypointIndex >= this.currentPath.length) {
+                    this.moveTowards(tx, ty, dt);
+                }
+            }
+        } else {
+            this.moveTowards(tx, ty, dt);
+        }
+    }
+
+    clearPath() {
+        this.currentPath = null;
+        this.waypointIndex = 0;
+        this.lastPathTarget = null;
     }
 }

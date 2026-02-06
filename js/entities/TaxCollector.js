@@ -36,6 +36,13 @@ export class TaxCollector {
         this.remove = false;
         this.walkPhase = 0;
         this.restingBuilding = null;
+
+        // A* Pathfinding properties
+        this.currentPath = null;
+        this.waypointIndex = 0;
+        this.pathRefreshTimer = 0;
+        this.pathRefreshInterval = 1.0;
+        this.lastPathTarget = null;
     }
 
     update(dt, game) {
@@ -112,7 +119,7 @@ export class TaxCollector {
                 this.collectTimer = 0;
                 this.vel.x = 0; this.vel.y = 0;
             } else {
-                this.moveTowards(this.target.x, this.target.y, dt);
+                this.moveWithPathfinding(this.target.x, this.target.y, dt, game);
             }
         }
 
@@ -161,7 +168,7 @@ export class TaxCollector {
                 this.target = null;
                 this.depositTarget = null;
             } else {
-                this.moveTowards(target.x, target.y, dt);
+                this.moveWithPathfinding(target.x, target.y, dt, game);
             }
         }
 
@@ -294,5 +301,55 @@ export class TaxCollector {
         ctx.fillRect(this.x - 10, this.y - 15, 20, 3);
         ctx.fillStyle = '#2ecc71';
         ctx.fillRect(this.x - 10, this.y - 15, 20 * (this.hp / this.maxHp), 3);
+    }
+
+    /**
+     * Move towards a target using A* pathfinding
+     */
+    moveWithPathfinding(tx, ty, dt, game) {
+        if (!game.pathfinder) {
+            this.moveTowards(tx, ty, dt);
+            return;
+        }
+
+        const targetKey = `${Math.floor(tx)},${Math.floor(ty)}`;
+        const needsNewPath = !this.currentPath || this.lastPathTarget !== targetKey || this.pathRefreshTimer <= 0;
+
+        if (needsNewPath) {
+            const path = game.pathfinder.findPath(this.x, this.y, tx, ty);
+            if (path && path.length > 0) {
+                this.currentPath = path;
+                this.waypointIndex = 0;
+                this.lastPathTarget = targetKey;
+                this.pathRefreshTimer = this.pathRefreshInterval;
+            } else {
+                this.moveTowards(tx, ty, dt);
+                return;
+            }
+        }
+
+        this.pathRefreshTimer -= dt;
+
+        if (this.currentPath && this.waypointIndex < this.currentPath.length) {
+            const waypoint = this.currentPath[this.waypointIndex];
+            const distToWaypoint = Utils.dist(this.x, this.y, waypoint.x, waypoint.y);
+
+            if (distToWaypoint > 15) {
+                this.moveTowards(waypoint.x, waypoint.y, dt);
+            } else {
+                this.waypointIndex++;
+                if (this.waypointIndex >= this.currentPath.length) {
+                    this.moveTowards(tx, ty, dt);
+                }
+            }
+        } else {
+            this.moveTowards(tx, ty, dt);
+        }
+    }
+
+    clearPath() {
+        this.currentPath = null;
+        this.waypointIndex = 0;
+        this.lastPathTarget = null;
     }
 }

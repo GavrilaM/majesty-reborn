@@ -2,18 +2,19 @@ export class Inventory {
     constructor() {
         // Belt: Dedicated consumable slots
         this.belt = {
-            potion1: null,  // First potion slot
-            potion2: null   // Second potion slot
+            potion1: null,  // First HP potion slot
+            potion2: null,  // Second HP potion slot
+            staminaPotion: null  // Energy/Stamina potion slot (NEW)
             // Future: scroll slot, bomb slot, etc.
         };
-        
+
         // Future expansions (commented out for now):
         // this.equipment = { weapon: null, armor: null, accessory: null };
         // this.backpack = { slots: Array(6).fill(null), capacity: 6 };
     }
 
     // === BELT METHODS ===
-    
+
     /**
      * Add a potion to the first available belt slot
      * @returns {boolean} - True if added, false if belt is full
@@ -91,5 +92,41 @@ export class Inventory {
     clearPotions() {
         this.belt.potion1 = null;
         this.belt.potion2 = null;
+        this.belt.staminaPotion = null;  // Also clear stamina potion
+    }
+
+    // === STAMINA POTION METHODS (NEW) ===
+
+    /**
+     * Add a stamina potion to the belt
+     * @returns {boolean} - True if added, false if slot is full
+     */
+    addStaminaPotion(potion) {
+        if (this.belt.staminaPotion === null) {
+            this.belt.staminaPotion = potion;
+            return true;
+        }
+        return false; // Stamina slot is full
+    }
+
+    /**
+     * Check if belt has a stamina potion
+     * @returns {boolean}
+     */
+    hasStaminaPotion() {
+        return this.belt.staminaPotion !== null;
+    }
+
+    /**
+     * Use (remove) the stamina potion
+     * @returns {Object|null} - The potion object, or null if empty
+     */
+    useStaminaPotion() {
+        if (this.belt.staminaPotion) {
+            const potion = this.belt.staminaPotion;
+            this.belt.staminaPotion = null;
+            return potion;
+        }
+        return null;
     }
 }

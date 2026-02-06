@@ -357,14 +357,19 @@ export class UIManager {
             title.innerText = 'SKILLS';
             skillEl.appendChild(title);
 
-            if (h.skills && h.skills.length > 0) {
-                h.skills.forEach(s => {
+            const learnedSkillIds = h.learnedSkills ? Object.keys(h.learnedSkills) : [];
+            if (learnedSkillIds.length > 0) {
+                learnedSkillIds.forEach(skillId => {
+                    const skillConfig = h.getSkillConfig ? h.getSkillConfig(skillId) : null;
+                    if (!skillConfig) return;
+
                     const row = document.createElement('div');
-                    const cd = Math.max(0, (s.lastUsed || -1) + s.cooldown - this.game.gameTime);
+                    const cd = h.getSkillCooldown ? h.getSkillCooldown(skillId, this.game.gameTime) : 0;
                     const status = cd > 0 ? `${cd.toFixed(1)}s` : 'Ready';
+                    const statusColor = cd > 0 ? '#ff8888' : '#88ff88';
                     row.className = 'visitor-row';
-                    row.title = s.description || '';
-                    row.innerHTML = `<span>${s.name}</span> <span style="font-size:9px; color:#8fd3ff;">${status}</span>`;
+                    row.title = skillConfig.description || '';
+                    row.innerHTML = `<span>${skillConfig.name}</span> <span style="font-size:9px; color:${statusColor};">${status}</span>`;
                     skillEl.appendChild(row);
                 });
             } else {
@@ -576,10 +581,11 @@ export class UIManager {
             const current = this.game.recruitQueue[0];
             const isCurrentHere = current && current.source && ((current.source === b) || (current.source.id && current.source.id === b.id));
             if (isCurrentHere) {
-                const total = current.type === 'RANGER' ? 3.0 : 2.0;
+                const total = current.type === 'RANGER' || current.type === 'WAYFARER' ? 3.0 : 2.0;
                 const pct = Math.max(0, Math.min(1, 1 - (current.timer / total)));
+                const displayName = current.type === 'RANGER' || current.type === 'WAYFARER' ? 'Wayfarer' : 'Mercenary';
                 if (rqBar) rqBar.style.width = (pct * 100) + '%';
-                if (rqText) rqText.innerText = `Training ${current.type} — ${Math.max(0, current.timer).toFixed(1)}s`;
+                if (rqText) rqText.innerText = `Training ${displayName} — ${Math.max(0, current.timer).toFixed(1)}s`;
             } else {
                 const positions = this.game.recruitQueue
                     .map((item, i) => (item.source && ((item.source === b) || (item.source.id && item.source.id === b.id))) ? (i + 1) : 0)

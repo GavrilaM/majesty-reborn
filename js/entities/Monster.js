@@ -71,6 +71,13 @@ export class Monster {
         this.projectileColor = config.projectileColor || '#ff0000';
 
         this.projectileColor = config.projectileColor || '#ff0000';
+
+        // A* Pathfinding properties
+        this.currentPath = null;      // Array of waypoints [{x, y}, ...]
+        this.waypointIndex = 0;       // Current waypoint we're moving towards
+        this.pathRefreshTimer = 0;    // Timer to refresh path periodically
+        this.pathRefreshInterval = 1.5; // Refresh path every 1.5 seconds
+        this.lastPathTarget = null;   // Last target we calculated path for
     }
 
 
@@ -285,7 +292,8 @@ export class Monster {
         if (shouldDisengage) {
             const dx = targetPoint.x - this.x, dy = targetPoint.y - this.y;
             const dist = Math.hypot(dx, dy);
-            const dir = dist > 0 ? { x: dx / dist, y: dy / dist } : { x: 0, y: 0 };
+            // Use A* pathfinding for building targets
+            const dir = this.getPathfindingDirection(targetPoint.x, targetPoint.y, dt, game);
             const arriveRadius = 50;
             const desiredSpeed = dist < arriveRadius ? this.speed * (dist / arriveRadius) : this.speed;
 
@@ -664,4 +672,87 @@ export class Monster {
         ctx.fillStyle = '#ff3333';
         ctx.fillRect(this.x - 10, this.y - 15, 20 * (this.hp / this.maxHp), 3);
     }
+
+    /**
+     * Move towards a target using A* pathfinding for buildings, direct for combat
+     * @param {number} tx - Target X coordinate
+     * @param {number} ty - Target Y coordinate
+     * @param {number} dt - Delta time
+     * @param {Object} game - Game reference
+     * @returns {{x: number, y: number}} The direction to move in
+     */
+    getPathfindingDirection(tx, ty, dt, game) {
+        // Only use pathfinding for building targets
+        const isTargetBuilding = this.target &&
+            (this.target.constructor.name === 'EconomicBuilding' ||
+                this.target.constructor.name === 'Building');
+
+        if (!isTargetBuilding || !game.pathfinder) {
+            // Direct movement for combat or if no pathfinder
+            const dx = tx - this.x, dy = ty - this.y;
+            const dist = Math.hypot(dx, dy);
+            return dist > 0 ? { x: dx / dist, y: dy / dist } : { x: 0, y: 0 };
+        }
+
+        // Check if we need a new path
+        const targetKey = `${Math.floor(tx)},${Math.floor(ty)}`;
+        const needsNewPath =
+            !this.currentPath ||
+            this.lastPathTarget !== targetKey ||
+            this.pathRefreshTimer <= 0;
+
+        if (needsNewPath) {
+            const path = game.pathfinder.findPath(this.x, this.y, tx, ty);
+            if (path && path.length > 0) {
+                this.currentPath = path;
+                this.waypointIndex = 0;
+                this.lastPathTarget = targetKey;
+                this.pathRefreshTimer = this.pathRefreshInterval;
+            } else {
+                // No path found - fall back to direct
+                const dx = tx - this.x, dy = ty - this.y;
+                const dist = Math.hypot(dx, dy);
+                return dist > 0 ? { x: dx / dist, y: dy / dist } : { x: 0, y: 0 };
+            }
+        }
+
+        this.pathRefreshTimer -= dt;
+
+        // Follow the path
+        if (this.currentPath && this.waypointIndex < this.currentPath.length) {
+            const waypoint = this.currentPath[this.waypointIndex];
+            const distToWaypoint = Utils.dist(this.x, this.y, waypoint.x, waypoint.y);
+
+            if (distToWaypoint < 15) {
+                this.waypointIndex++;
+                if (this.waypointIndex >= this.currentPath.length) {
+                    // End of path - direct to target
+                    const dx = tx - this.x, dy = ty - this.y;
+                    const dist = Math.hypot(dx, dy);
+                    return dist > 0 ? { x: dx / dist, y: dy / dist } : { x: 0, y: 0 };
+                }
+            }
+
+            // Direction to current waypoint
+            const wp = this.currentPath[this.waypointIndex];
+            const dx = wp.x - this.x, dy = wp.y - this.y;
+            const dist = Math.hypot(dx, dy);
+            return dist > 0 ? { x: dx / dist, y: dy / dist } : { x: 0, y: 0 };
+        }
+
+        // Fallback to direct
+        const dx = tx - this.x, dy = ty - this.y;
+        const dist = Math.hypot(dx, dy);
+        return dist > 0 ? { x: dx / dist, y: dy / dist } : { x: 0, y: 0 };
+    }
+
+    /**
+     * Clear current path (call when target changes)
+     */
+    clearPath() {
+        this.currentPath = null;
+        this.waypointIndex = 0;
+        this.lastPathTarget = null;
+    }
 }
+

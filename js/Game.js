@@ -6,12 +6,15 @@ import { Projectile } from './entities/Projectile.js';
 import { Particle } from './entities/Particle.js';
 import { EconomicBuilding } from './entities/EconomicBuilding.js';
 import { ItemDrop } from './entities/ItemDrop.js';
+import { POI } from './entities/POI.js';
 import { UIManager } from './managers/UIManager.js';
 import { BuildManager } from './managers/BuildManager.js';
 import { Worker } from './entities/Worker.js';
 import { CastleGuard } from './entities/CastleGuard.js';
 import { TaxCollector } from './entities/TaxCollector.js';
 import { Utils } from './utils.js';
+import { NavGrid } from './systems/NavGrid.js';
+import { Pathfinder } from './systems/Pathfinder.js';
 import { WAVES, WAVE_CONFIG } from './config/WaveConfig.js';
 
 class Game {
@@ -44,6 +47,10 @@ class Game {
 
         this.resize();
         window.addEventListener('resize', () => this.resize());
+
+        // Initialize Navigation Grid for A* pathfinding
+        this.navGrid = new NavGrid(this.canvas.width, this.canvas.height, 20);
+        this.pathfinder = new Pathfinder(this.navGrid);
         this.mouseX = 0;
         this.mouseY = 0;
         this.canvas.addEventListener('mousemove', (e) => {
@@ -56,7 +63,16 @@ class Game {
         this.castle.isUnderConstruction = false;
         this.castle.level = 1;
         this.entities.push(this.castle);
+
+        // Mark Castle footprint on navigation grid
+        this.navGrid.markBlocked(this.castle.x, this.castle.y, this.castle.width, this.castle.height);
         this.spawnInitialNPCs();
+
+        // POI System: Explorable points of interest
+        this.poiRespawnTimer = 0;
+        this.poiRespawnInterval = 60; // Respawn POI every 60 seconds
+        this.spawnInitialPOIs();
+
         this.setupInputs();
         this.loop(0);
     }
@@ -73,6 +89,88 @@ class Game {
         // Tax Collector
         const tc = new TaxCollector(c.x + 50, c.y + 50);
         this.entities.push(tc);
+    }
+
+    /**
+     * EXPLORE 2.0: Spawn initial POIs (treasure chests and monster dens)
+     * POIs spawn randomly across the map, minimum 150px from castle
+     */
+    spawnInitialPOIs() {
+        const treasureCount = 2 + Math.floor(Math.random() * 2); // 2-3 treasures
+        const denCount = 1 + Math.floor(Math.random() * 2); // 1-2 dens
+
+        for (let i = 0; i < treasureCount; i++) {
+            const pos = this.getRandomPOIPosition();
+            if (pos) {
+                const poi = new POI(pos.x, pos.y, 'TREASURE', this);
+                this.entities.push(poi);
+            }
+        }
+
+        for (let i = 0; i < denCount; i++) {
+            const pos = this.getRandomPOIPosition(250); // Dens spawn further from castle
+            if (pos) {
+                const poi = new POI(pos.x, pos.y, 'DEN', this);
+                // Store Monster class reference for DEN spawning
+                poi.game.Monster = Monster;
+                this.entities.push(poi);
+            }
+        }
+    }
+
+    /**
+     * Get a random position for POI spawning
+     * @param {number} minDistFromCastle - Minimum distance from castle (default 150)
+     */
+    getRandomPOIPosition(minDistFromCastle = 150) {
+        const padding = 50;
+        const maxAttempts = 20;
+
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            const x = padding + Math.random() * (this.canvas.width - padding * 2);
+            const y = padding + Math.random() * (this.canvas.height - padding * 2);
+
+            // Check distance from castle
+            const distFromCastle = Utils.dist(x, y, this.castle.x, this.castle.y);
+            if (distFromCastle < minDistFromCastle) continue;
+
+            // Check not overlapping buildings
+            const tooCloseToBuilding = this.entities.some(e =>
+                (e.constructor.name === 'EconomicBuilding' || e.constructor.name === 'Castle') &&
+                Utils.dist(x, y, e.x, e.y) < 80
+            );
+            if (tooCloseToBuilding) continue;
+
+            // Check not overlapping other POIs
+            const tooCloseToPOI = this.entities.some(e =>
+                e.constructor.name === 'POI' &&
+                Utils.dist(x, y, e.x, e.y) < 100
+            );
+            if (tooCloseToPOI) continue;
+
+            return { x, y };
+        }
+
+        return null; // Failed to find valid position
+    }
+
+    /**
+     * Respawn a single POI if total count is below threshold
+     */
+    respawnPOI() {
+        const currentPOIs = this.entities.filter(e => e.constructor.name === 'POI' && !e.remove);
+        if (currentPOIs.length >= 4) return; // Max 4 POIs at a time
+
+        // 70% chance treasure, 30% chance den
+        const type = Math.random() < 0.7 ? 'TREASURE' : 'DEN';
+        const minDist = type === 'DEN' ? 250 : 150;
+        const pos = this.getRandomPOIPosition(minDist);
+
+        if (pos) {
+            const poi = new POI(pos.x, pos.y, type, this);
+            if (type === 'DEN') poi.game.Monster = Monster;
+            this.entities.push(poi);
+        }
     }
 
     queueNpcRespawn(type, delay = 15) {
@@ -346,6 +444,13 @@ class Game {
             }
         }
 
+        // POI Respawn Timer
+        this.poiRespawnTimer += dt;
+        if (this.poiRespawnTimer >= this.poiRespawnInterval) {
+            this.poiRespawnTimer = 0;
+            this.respawnPOI();
+        }
+
         if (this.castle.hp <= 0) {
             this.waveState = 'DEFEAT';
             this.endGame();
@@ -555,6 +660,10 @@ class Game {
         this.builder.drawPreview(this.ctx, this.mouseX, this.mouseY);
 
         if (this.debugMode) {
+            // Draw NavGrid debug overlay
+            this.navGrid.debugMode = true;
+            this.navGrid.drawDebug(this.ctx);
+
             const ctx = this.ctx;
             ctx.save();
             ctx.font = '10px monospace';
@@ -578,6 +687,8 @@ class Game {
                 }
             });
             ctx.restore();
+        } else {
+            this.navGrid.debugMode = false;
         }
     }
 

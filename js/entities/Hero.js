@@ -1,7 +1,7 @@
 import { Utils } from '../utils.js';
 import { Stats } from '../components/Stats.js';
 import { Inventory } from '../components/Inventory.js';
-import { CLASS_CONFIG } from '../config/ClassConfig.js';
+import { CLASS_CONFIG, SKILL_CONFIG } from '../config/ClassConfig.js';
 import { Projectile } from './Projectile.js';
 import { Particle } from './Particle.js';
 import { ItemDrop } from './ItemDrop.js';
@@ -15,13 +15,18 @@ export class Hero {
         this.x = Number.isFinite(x) ? x : 400;
         this.y = Number.isFinite(y) ? y : 400;
 
-        // FIX: Validate type and fallback to WARRIOR if invalid
-        this.type = CLASS_CONFIG[type] ? type : 'WARRIOR';
+        // Normalize type to new names (MERCENARY/WAYFARER)
+        // Support legacy WARRIOR/RANGER for backward compatibility
+        if (type === 'WARRIOR') type = 'MERCENARY';
+        if (type === 'RANGER') type = 'WAYFARER';
+        this.type = CLASS_CONFIG[type] ? type : 'MERCENARY';
         if (!CLASS_CONFIG[type]) {
-            console.warn('[Hero] Invalid type:', type, '- defaulting to WARRIOR');
+            console.warn('[Hero] Invalid type:', type, '- defaulting to MERCENARY');
         }
 
-        this.color = this.type === 'WARRIOR' ? '#3498db' : '#27ae60';
+        // Get color from config or fallback
+        const classConfig = CLASS_CONFIG[this.type];
+        this.color = classConfig?.color || '#3498db';
         this.radius = 15;
         this.visible = true;
         this.vel = { x: 0, y: 0 };
@@ -75,8 +80,13 @@ export class Hero {
         this.lastShopTime = -100; // Allow immediate shopping at start
         this.fateUsed = false;
 
-        this.skills = [];
-        this.skillActive = null;
+        // SKILL SYSTEM - New implementation
+        this.learnedSkills = {};           // { skillId: true } - Skills hero has learned
+        this.skillCooldowns = {};          // { skillId: lastUsedTime } - Track cooldowns
+        this.skillActive = null;           // Currently executing skill
+        this.skillLockTimer = 0;           // Lock during skill execution
+        this.tumbleCooldown = 0;           // Specific cooldown for tumble (backward compat)
+
         this.actionLockTimer = 0;
         this.isAiming = false;
         this.aimingTimer = 0;
@@ -92,7 +102,6 @@ export class Hero {
         this.lungeVec = { x: 0, y: 0 };
         this.flashTimer = 0;
         this.preparedAttack = false; // Fix for attack windup loop
-        // Ranger skill disabled per Operation Combat Polish
         this.stuckTimer = 0;
         this.lastMoveX = x;
         this.lastMoveY = y;
@@ -101,6 +110,26 @@ export class Hero {
         this.stuckAttempts = 0;
         this.doorApproachTimer = 0;
         this.walkPhase = 0;
+
+        // A* Pathfinding properties
+        this.currentPath = null;      // Array of waypoints [{x, y}, ...]
+        this.waypointIndex = 0;       // Current waypoint we're moving towards
+        this.pathRefreshTimer = 0;    // Timer to refresh path periodically
+        this.pathRefreshInterval = 1.0; // Refresh path every 1 second
+        this.lastPathTarget = null;   // Last target we calculated path for
+
+        // AUTO-LEARN TIER 1 SKILL: Heroes start with their basic skill
+        // This gives them combat flavor from the start
+        const classSkills = SKILL_CONFIG[this.type];
+        if (classSkills) {
+            for (const skillId of Object.keys(classSkills)) {
+                const skill = classSkills[skillId];
+                if (skill.tier === 1 && !skill.isPassive) {
+                    this.learnSkill(skillId);
+                    break; // Only learn the first tier-1 skill
+                }
+            }
+        }
     }
 
     update(dt, game) {
@@ -153,6 +182,7 @@ export class Hero {
         if (this.actionLockTimer > 0) this.actionLockTimer -= dt;
         if (this.aimingTimer > 0) { this.aimingTimer -= dt; if (this.aimingTimer <= 0) this.isAiming = false; }
         if (this.tiredCooldown > 0) this.tiredCooldown -= dt;
+        if (this.skillLockTimer > 0) this.skillLockTimer -= dt;
         // STAMINA REGEN
         if (this.stamina < this.maxStamina) {
             this.stamina = Math.min(this.maxStamina, this.stamina + this.staminaRegen * dt);
@@ -185,6 +215,22 @@ export class Hero {
 
         // NEW: Auto-use potions when HP is low
         this.checkPotionUsage(game);
+
+        // PROACTIVE SKILL CHECK: Allow ranged heroes to use defensive skills outside of FIGHT
+        // This enables Wayfarer to Tumble when enemies approach during exploration
+        const classConfig = CLASS_CONFIG[this.type];
+        if (classConfig?.isRanged && this.state !== 'FIGHT') {
+            // Find nearby threat for skill trigger check
+            const threat = game.entities.find(e =>
+                e.constructor.name === 'Monster' &&
+                !e.remove &&
+                Utils.dist(this.x, this.y, e.x, e.y) < 100
+            );
+            if (threat) {
+                this.target = threat; // Temporarily set target for skill check
+                this.tryUseSkills(game);
+            }
+        }
 
         // State Machine
         switch (this.state) {
@@ -231,20 +277,50 @@ export class Hero {
         this.integrate(dt, game);
     }
 
+    /**
+     * DECISION 2.0: Affinity-Based Action Choice
+     * Uses patrolAffinity/exploreAffinity from ClassConfig and personality traits.
+     */
     decideNextAction(game) {
         const hasPotionNeed = !this.inventory.isBeltFull();
         const lowGold = this.gold < 50;
         const healthy = this.hp >= this.maxHp * 0.9;
-        const cls = this.type;
-        let exploreW = 0.5, patrolW = 0.5;
-        if (cls === 'RANGER') { exploreW = 0.75; patrolW = 0.25; if (healthy) exploreW = 0.85; }
-        if (cls === 'WARRIOR') { exploreW = 0.4; patrolW = 0.6; }
-        // Greed/Money influence
-        // Jika gold sedikit atau inventory kosong, tingkatkan keinginan Explore mencari loot
-        if (lowGold || hasPotionNeed) { exploreW += 0.2; patrolW -= 0.2; }
-        exploreW = Utils.clamp(exploreW, 0, 1); patrolW = Utils.clamp(patrolW, 0, 1);
+
+        // Get class affinities from config
+        const classConfig = CLASS_CONFIG[this.type];
+        let exploreW = classConfig?.exploreAffinity ?? 0.5;
+        let patrolW = classConfig?.patrolAffinity ?? 0.5;
+
+        // Personality modifiers
+        // Greedy heroes want to explore for loot
+        if (this.personality?.greedy > 0.6) {
+            exploreW += 0.15;
+        }
+
+        // Smart heroes patrol more efficiently (less wasted wandering)
+        if (this.personality?.smart > 0.6) {
+            patrolW += 0.1;
+        }
+
+        // If low on gold or missing potions, explore to find resources
+        if (lowGold || hasPotionNeed) {
+            exploreW += 0.2;
+            patrolW -= 0.1;
+        }
+
+        // If healthy, more willing to explore dangerous areas
+        if (healthy) {
+            exploreW += 0.1;
+        }
+
+        // Normalize weights
+        exploreW = Utils.clamp(exploreW, 0, 1);
+        patrolW = Utils.clamp(patrolW, 0, 1);
+        const total = exploreW + patrolW;
+        const exploreChance = exploreW / total;
+
         const roll = Math.random();
-        if (roll < exploreW) {
+        if (roll < exploreChance) {
             const pt = this.getExplorePoint(game);
             this.exploreTarget = pt;
             this.exploreTimer = 6.0;
@@ -278,68 +354,340 @@ export class Hero {
         return true;
     }
 
+    /**
+     * EXPLORE 2.0: Natural Discovery & Smart Threat Response
+     * - Heroes don't beeline to POIs, they discover them naturally
+     * - Personality-based threat evaluation when encountering danger
+     */
     behaviorExplore(dt, game) {
-        if (!this.exploreTarget) { this.state = 'DECISION'; return; }
+        if (!this.exploreTarget) {
+            this.state = 'DECISION';
+            return;
+        }
+
+        // DISCOVERY RADIUS: Based on INT stat
+        const discoveryRadius = 80 + (this.stats?.current?.INT || 5) * 4; // 80-120px
+
+        // Check for POI discovery while moving
+        const nearbyPOIs = game.entities.filter(e =>
+            e.constructor?.name === 'POI' &&
+            !e.remove &&
+            Utils.dist(this.x, this.y, e.x, e.y) < discoveryRadius
+        );
+
+        for (const poi of nearbyPOIs) {
+            // Mark as discovered (shows particle effect once)
+            if (!poi.discovered) {
+                poi.markDiscovered(this, game);
+            }
+
+            // TREASURE: Approach and loot if within interaction range
+            if (poi.type === 'TREASURE' && Utils.dist(this.x, this.y, poi.x, poi.y) < poi.interactRadius + 10) {
+                poi.interact(this, game);
+                // Greedy heroes might continue exploring for more
+                if (this.personality?.greedy > 0.7) {
+                    this.exploreTarget = this.getExplorePoint(game);
+                    this.exploreTimer = 6.0;
+                } else {
+                    this.state = 'DECISION';
+                }
+                return;
+            }
+        }
+
+        // THREAT DETECTION: Check for monsters/dens during exploration
+        const perceptionRange = this.stats?.derived?.perceptionRange || 150;
+        const nearbyMonsters = game.entities.filter(e =>
+            e.constructor?.name === 'Monster' &&
+            !e.remove &&
+            Utils.dist(this.x, this.y, e.x, e.y) < perceptionRange
+        );
+
+        if (nearbyMonsters.length > 0) {
+            // SMART THREAT EVALUATION
+            const decision = this.evaluateExplorationThreat(nearbyMonsters, game);
+
+            switch (decision) {
+                case 'FIGHT':
+                    this.target = nearbyMonsters[0];
+                    this.state = 'FIGHT';
+                    game.entities.push(new Particle(this.x, this.y - 30, "!", "#ff6600"));
+                    return;
+
+                case 'FLEE':
+                    // Run away from closest threat
+                    const closest = nearbyMonsters.sort((a, b) =>
+                        Utils.dist(this.x, this.y, a.x, a.y) - Utils.dist(this.x, this.y, b.x, b.y)
+                    )[0];
+                    const fleeAngle = Math.atan2(this.y - closest.y, this.x - closest.x);
+                    this.x += Math.cos(fleeAngle) * this.stats.derived.moveSpeedMultiplier * 60 * dt;
+                    this.y += Math.sin(fleeAngle) * this.stats.derived.moveSpeedMultiplier * 60 * dt;
+                    game.entities.push(new Particle(this.x, this.y - 30, "!!", "#e74c3c"));
+                    return;
+
+                case 'REROUTE':
+                    // Find alternative explore point away from danger
+                    this.exploreTarget = this.getExplorePoint(game);
+                    game.entities.push(new Particle(this.x, this.y - 30, "...", "#9b59b6"));
+                    return;
+
+                case 'IGNORE':
+                default:
+                    // Continue exploring, stay alert
+                    break;
+            }
+        }
+
+        // Standard explore movement
         const d = Utils.dist(this.x, this.y, this.exploreTarget.x, this.exploreTarget.y);
-        if (d < 15) { this.state = 'DECISION'; this.exploreTarget = null; return; }
+        if (d < 15) {
+            this.state = 'DECISION';
+            this.exploreTarget = null;
+            return;
+        }
+
         this.exploreTimer = (this.exploreTimer || 0) - dt;
-        if (this.exploreTimer <= 0) { this.state = 'DECISION'; this.exploreTarget = null; return; }
+        if (this.exploreTimer <= 0) {
+            this.state = 'DECISION';
+            this.exploreTarget = null;
+            return;
+        }
+
         const beforeX = this.x, beforeY = this.y;
-        this.moveTowards(this.exploreTarget.x, this.exploreTarget.y, dt, game);
+        this.moveWithPathfinding(this.exploreTarget.x, this.exploreTarget.y, dt, game, true);
         const moved = Utils.dist(beforeX, beforeY, this.x, this.y);
-        if (moved < 1) { this.stuckTimer += dt; } else { this.stuckTimer = 0; this.stuckAttempts = 0; }
+
+        if (moved < 1) {
+            this.stuckTimer += dt;
+        } else {
+            this.stuckTimer = 0;
+            this.stuckAttempts = 0;
+        }
+
         if (this.stuckTimer > 2.0 && d > 25) {
             this.stuckAttempts = (this.stuckAttempts || 0) + 1;
-            if (this.stuckAttempts > 3) { this.state = 'DECISION'; this.stuckAttempts = 0; this.stuckTimer = 0; return; }
+            if (this.stuckAttempts > 3) {
+                this.state = 'DECISION';
+                this.stuckAttempts = 0;
+                this.stuckTimer = 0;
+                return;
+            }
             this.exploreTarget = this.getExplorePoint(game);
             this.stuckTimer = 0;
         }
     }
 
-    setupPatrolRoute(game) {
-        const doors = [];
-        const nearestGuild = game.entities
-            .filter(e => e.constructor.name === 'EconomicBuilding' && e.type === 'GUILD')
-            .sort((a, b) => Utils.dist(this.x, this.y, a.x, a.y) - Utils.dist(this.x, this.y, b.x, b.y))[0];
-        if (nearestGuild) doors.push(game.getDoorPoint(nearestGuild));
-        if (game.castle) doors.push(game.getDoorPoint(game.castle));
-        const market = game.entities
-            .filter(e => e.constructor.name === 'EconomicBuilding' && e.type === 'MARKET')
-            .sort((a, b) => Utils.dist(this.x, this.y, a.x, a.y) - Utils.dist(this.x, this.y, b.x, b.y))[0];
-        if (market) doors.push(game.getDoorPoint(market));
-        if (nearestGuild) doors.push(game.getDoorPoint(nearestGuild));
-        if (doors.length === 0 && game.castle) {
-            const c = game.castle;
-            doors.push({ x: c.x - 50, y: c.y + 50 });
-            doors.push({ x: c.x + 50, y: c.y + 50 });
+    /**
+     * EXPLORE 2.0: Evaluate threat during exploration
+     * Returns: 'FIGHT' | 'FLEE' | 'REROUTE' | 'IGNORE'
+     */
+    evaluateExplorationThreat(monsters, game) {
+        if (monsters.length === 0) return 'IGNORE';
+
+        const brave = this.personality?.brave ?? 0.5;
+        const smart = this.personality?.smart ?? 0.5;
+        const greedy = this.personality?.greedy ?? 0.5;
+
+        // Calculate average threat level
+        let totalThreat = 0;
+        for (const m of monsters) {
+            totalThreat += this.evaluateThreatLevel(m);
         }
-        this.patrolRoute = doors;
-        this.patrolIdx = 0;
-        this.patrolTimer = 10.0;
+        const avgThreat = totalThreat / monsters.length;
+
+        // Check if there's treasure nearby worth fighting for
+        const nearbyTreasure = game.entities.find(e =>
+            e.constructor?.name === 'POI' &&
+            e.type === 'TREASURE' &&
+            !e.remove &&
+            Utils.dist(this.x, this.y, e.x, e.y) < 150
+        );
+
+        // HP check
+        const hpPercent = this.hp / this.maxHp;
+
+        // BRAVE HEROES: Fight if threat is manageable
+        if (brave > 0.7) {
+            if (avgThreat < 50) return 'FIGHT';
+            if (avgThreat < 80 && hpPercent > 0.6) return 'FIGHT';
+            return 'FIGHT'; // Brave to the end
+        }
+
+        // COWARD HEROES: Flee at first sight
+        if (brave < 0.4) {
+            if (avgThreat > 20) return 'FLEE';
+            if (monsters.length > 1) return 'FLEE';
+            return 'REROUTE'; // Even low threat makes them nervous
+        }
+
+        // SMART HEROES: Make optimal decision
+        if (smart > 0.6) {
+            if (avgThreat < 30 && hpPercent > 0.7) return 'FIGHT';
+            if (avgThreat < 50 && nearbyTreasure && greedy > 0.5) return 'FIGHT';
+            if (avgThreat > 60 || hpPercent < 0.4) return 'REROUTE';
+            return 'IGNORE'; // Wait and see
+        }
+
+        // GREEDY HEROES: Fight if treasure nearby
+        if (greedy > 0.7) {
+            if (nearbyTreasure && avgThreat < 60) return 'FIGHT';
+            if (hpPercent < 0.3) return 'FLEE'; // Save the gold!
+        }
+
+        // DEFAULT: Moderate response
+        if (avgThreat < 40) return 'FIGHT';
+        if (avgThreat > 70) return 'FLEE';
+        return 'REROUTE';
     }
 
+    /**
+     * PATROL 2.0: Building-Bound Patrol System
+     * Sets up a patrol route that visits random buildings in the city.
+     * Hero lingers at each building for a short time before moving to next.
+     */
+    setupPatrolRoute(game) {
+        // Get all buildings in the city
+        const buildings = game.entities.filter(e =>
+            e.constructor.name === 'EconomicBuilding' ||
+            e.constructor.name === 'Castle'
+        );
+
+        if (buildings.length === 0) {
+            // Fallback: patrol around castle
+            if (game.castle) {
+                this.patrolRoute = [
+                    { x: game.castle.x - 60, y: game.castle.y + 50 },
+                    { x: game.castle.x + 60, y: game.castle.y + 50 }
+                ];
+            } else {
+                this.patrolRoute = [];
+            }
+            this.patrolIdx = 0;
+            this.patrolTimer = 15.0;
+            this.patrolLingerTimer = 0;
+            return;
+        }
+
+        // Pick 3-5 random buildings to visit
+        const numWaypoints = 3 + Math.floor(Math.random() * 3);
+        const shuffled = [...buildings].sort(() => Math.random() - 0.5);
+        const selectedBuildings = shuffled.slice(0, Math.min(numWaypoints, buildings.length));
+
+        // Generate perimeter waypoints around each building
+        this.patrolRoute = selectedBuildings.map(building => {
+            // Calculate a point on the building's perimeter (south side preferred for visibility)
+            const angle = Math.PI * 0.5 + (Math.random() - 0.5) * Math.PI * 0.5; // 45° to 135° (south-ish)
+            const radius = (building.width || 40) * 0.5 + 25; // Outside building footprint
+            return {
+                x: building.x + Math.cos(angle) * radius,
+                y: building.y + Math.sin(angle) * radius,
+                building: building // Reference for threat detection
+            };
+        });
+
+        this.patrolIdx = 0;
+        this.patrolTimer = 20.0;  // Total patrol duration
+        this.patrolLingerTimer = 0;  // Time spent at current waypoint
+        this.isLingering = false;
+    }
+
+    /**
+     * PATROL 2.0: Building-Bound Patrol Behavior
+     * - Visits random buildings and lingers for 3-5 seconds
+     * - Enhanced threat detection: responds to building attacks
+     * - +50% perception range while patrolling
+     */
     behaviorPatrol(dt, game) {
-        if (!this.patrolRoute || this.patrolRoute.length === 0) { this.setupPatrolRoute(game); if (!this.patrolRoute || this.patrolRoute.length === 0) { this.state = 'DECISION'; return; } }
-        const tgt = this.patrolRoute[this.patrolIdx];
-        const d = Utils.dist(this.x, this.y, tgt.x, tgt.y);
-        if (d < 20) {
-            this.patrolIdx++;
-            if (this.patrolIdx >= this.patrolRoute.length) { this.state = 'DECISION'; return; }
-        } else {
-            const beforeX = this.x, beforeY = this.y;
-            this.moveTowards(tgt.x, tgt.y, dt, game);
-            const moved = Utils.dist(beforeX, beforeY, this.x, this.y);
-            if (moved < 1) { this.stuckTimer += dt; } else { this.stuckTimer = 0; this.stuckAttempts = 0; }
-            if (this.stuckTimer > 2.0 && d > 25) {
-                // Skip ke waypoint berikutnya atau rekalkulasi rute
-                this.patrolIdx = Math.min(this.patrolIdx + 1, this.patrolRoute.length - 1);
-                this.stuckAttempts = (this.stuckAttempts || 0) + 1;
-                if (this.stuckAttempts > 3) { this.state = 'DECISION'; this.stuckAttempts = 0; return; }
-                this.stuckTimer = 0;
+        // Setup route if needed
+        if (!this.patrolRoute || this.patrolRoute.length === 0) {
+            this.setupPatrolRoute(game);
+            if (!this.patrolRoute || this.patrolRoute.length === 0) {
+                this.state = 'DECISION';
+                return;
             }
         }
+
+        // THREAT DETECTION: Check if any building is under attack
+        // Patrol heroes have boosted perception (+50%)
+        const boostedPerception = (this.stats?.derived?.perceptionRange || 200) * 1.5;
+        const buildingUnderAttack = game.entities.find(e =>
+            (e.constructor.name === 'EconomicBuilding' || e.constructor.name === 'Castle') &&
+            e.hp < e.maxHp && // Has taken damage
+            e.lastDamageTime && (game.gameTime - e.lastDamageTime) < 2.0 && // Damaged recently
+            Utils.dist(this.x, this.y, e.x, e.y) < boostedPerception
+        );
+
+        if (buildingUnderAttack) {
+            // Find the attacker
+            const attacker = game.entities.find(m =>
+                m.constructor.name === 'Monster' &&
+                !m.remove &&
+                Utils.dist(m.x, m.y, buildingUnderAttack.x, buildingUnderAttack.y) < 80
+            );
+            if (attacker) {
+                this.target = attacker;
+                this.state = 'FIGHT';
+                game.entities.push(new Particle(this.x, this.y - 30, "DEFEND!", "#ffcc00"));
+                return;
+            }
+        }
+
+        const tgt = this.patrolRoute[this.patrolIdx];
+        const d = Utils.dist(this.x, this.y, tgt.x, tgt.y);
+
+        // LINGER MECHANIC: Pause at each waypoint
+        if (this.isLingering) {
+            this.patrolLingerTimer -= dt;
+            if (this.patrolLingerTimer <= 0) {
+                // Done lingering, move to next waypoint
+                this.isLingering = false;
+                this.patrolIdx++;
+                if (this.patrolIdx >= this.patrolRoute.length) {
+                    this.state = 'DECISION';
+                    return;
+                }
+            }
+            // Stay in place while lingering (idle animation state)
+            return;
+        }
+
+        // Arrived at waypoint
+        if (d < 20) {
+            // Start lingering at this building
+            this.isLingering = true;
+            this.patrolLingerTimer = 3.0 + Math.random() * 2.0; // 3-5 seconds
+            return;
+        }
+
+        // Moving to waypoint
+        const beforeX = this.x, beforeY = this.y;
+        this.moveWithPathfinding(tgt.x, tgt.y, dt, game, true);
+        const moved = Utils.dist(beforeX, beforeY, this.x, this.y);
+
+        if (moved < 1) {
+            this.stuckTimer += dt;
+        } else {
+            this.stuckTimer = 0;
+            this.stuckAttempts = 0;
+        }
+
+        if (this.stuckTimer > 2.0 && d > 25) {
+            // Skip to next waypoint if stuck
+            this.patrolIdx = Math.min(this.patrolIdx + 1, this.patrolRoute.length - 1);
+            this.stuckAttempts = (this.stuckAttempts || 0) + 1;
+            if (this.stuckAttempts > 3) {
+                this.state = 'DECISION';
+                this.stuckAttempts = 0;
+                return;
+            }
+            this.stuckTimer = 0;
+        }
+
+        // Overall patrol timer
         this.patrolTimer = (this.patrolTimer || 0) - dt;
-        if (this.patrolTimer <= 0) { this.state = 'DECISION'; }
+        if (this.patrolTimer <= 0) {
+            this.state = 'DECISION';
+        }
     }
     findHome(game) {
         // Prioritize Guilds
@@ -417,7 +765,7 @@ export class Hero {
                     this.acc.y += (dy / len) * approachSpeed;
                 }
             } else {
-                this.moveTowards(door.x, door.y, dt, game);
+                this.moveWithPathfinding(door.x, door.y, dt, game, true);
             }
         }
     }
@@ -681,6 +1029,12 @@ export class Hero {
             this.state = 'DECISION'; this.target = null; return;
         }
 
+        // NEW: Try to use skills before normal attack logic
+        if (this.tryUseSkills(game)) {
+            // Skill was used, possibly skip normal attack this frame
+            return;
+        }
+
         const config = CLASS_CONFIG[this.type];
         const dist = Utils.dist(this.x, this.y, this.target.x, this.target.y);
 
@@ -817,7 +1171,7 @@ export class Hero {
                     this.acc.y += (dy / len) * approachSpeed;
                 }
             } else {
-                this.moveTowards(door.x, door.y, dt, game);
+                this.moveWithPathfinding(door.x, door.y, dt, game, true);
             }
         }
 
@@ -894,35 +1248,62 @@ export class Hero {
         // (Let the building heal us for free instead)
         if (this.state === 'RETREAT') return;
 
-        // Calculate drink threshold based on personality
-        // Formula: Base 40% HP * personality modifier
-        // - Brave heroes (1.0): Drink at 40% HP (efficient)
-        // - Cowardly heroes (0.3): Drink at 68% HP (wasteful but safe)
-        const baseDrinkPercent = 0.40;
-        const personalityModifier = (2 - this.personality.brave);
-        const drinkThreshold = this.maxHp * baseDrinkPercent * personalityModifier;
+        // SMART TRAIT INTEGRATION:
+        // Smart heroes (1.0): Know exact threshold to drink (efficient)
+        // Dumb heroes (0.3): Panic drink at wrong times (wasteful)
+        // Brave heroes: Drink later (more risk)
+        // Cowardly heroes: Drink earlier (safer but wasteful)
 
-        // Check: HP low enough AND we have a potion
+        const smartness = this.personality?.smart || 0.5;
+        const bravery = this.personality?.brave || 0.5;
+
+        // Base threshold: 40% HP for optimal efficiency
+        // Smart heroes approach this optimal value
+        // Dumb heroes vary wildly (drink at 30%-70%)
+        const optimalThreshold = 0.40;
+        const variance = (1 - smartness) * 0.30; // Dumb = ±30% variance
+        const braveModifier = (1 - bravery) * 0.20; // Coward = +20% earlier
+
+        const hpThreshold = optimalThreshold + braveModifier + (Math.random() - 0.5) * variance;
+        const drinkThreshold = this.maxHp * Math.max(0.2, Math.min(0.7, hpThreshold));
+
+        // Check HP Potions
         if (this.hp < drinkThreshold && this.inventory.hasPotion()) {
             const potion = this.inventory.usePotion();
 
             if (potion) {
-                // Heal the hero
                 const healAmount = potion.healAmount || 50;
                 const oldHp = this.hp;
                 this.hp = Math.min(this.hp + healAmount, this.maxHp);
                 const actualHeal = this.hp - oldHp;
 
-                // Visual feedback
                 game.entities.push(new Particle(
                     this.x,
                     this.y - 40,
                     `+ ${Math.floor(actualHeal)} HP`,
                     "#2ecc71"
                 ));
+            }
+        }
 
-                // Optional: Add a "gulp" sound effect trigger here
-                // game.playSound('potion_drink');
+        // STAMINA POTION CHECK (NEW)
+        // Smart heroes: Drink when stamina < 25% and in combat
+        // Dumb heroes: May forget or drink at wrong times
+        const staminaPercent = this.stamina / this.maxStamina;
+        const shouldDrinkStamina = this.state === 'FIGHT' && staminaPercent < 0.25;
+
+        if (shouldDrinkStamina && smartness > 0.4 && this.inventory.hasStaminaPotion?.()) {
+            const staminaPotion = this.inventory.useStaminaPotion?.();
+            if (staminaPotion) {
+                const restoreAmount = staminaPotion.staminaAmount || 50;
+                this.stamina = Math.min(this.stamina + restoreAmount, this.maxStamina);
+
+                game.entities.push(new Particle(
+                    this.x,
+                    this.y - 40,
+                    `+ ${restoreAmount} STA`,
+                    "#3498db"
+                ));
             }
         }
     }
@@ -1295,4 +1676,394 @@ export class Hero {
         if (this.personality.smart > 0.7) { ctx.fillStyle = 'cyan'; ctx.fillRect(this.x + 8, this.y - 42, 4, 4); }
         ctx.restore();
     }
+
+    /**
+     * Move towards a target using A* pathfinding for buildings, direct for combat
+     * @param {number} tx - Target X coordinate
+     * @param {number} ty - Target Y coordinate
+     * @param {number} dt - Delta time
+     * @param {Object} game - Game reference
+     * @param {boolean} usePathfinding - Whether to use A* (default: auto-detect)
+     */
+    moveWithPathfinding(tx, ty, dt, game, usePathfinding = null) {
+        // Determine if we should use pathfinding
+        // Use pathfinding for: buildings, retreating, exploring
+        // Use direct movement for: combat (need to face enemy directly)
+        const shouldUsePath = usePathfinding !== null ? usePathfinding :
+            (this.target && (
+                this.target.constructor.name === 'EconomicBuilding' ||
+                this.state === 'RETREAT' ||
+                this.state === 'SHOP' ||
+                this.state === 'EXPLORE' ||
+                this.state === 'PATROL'
+            ));
+
+        if (!shouldUsePath || !game.pathfinder) {
+            // Direct movement for combat or if no pathfinder
+            this.moveTowards(tx, ty, dt, game);
+            return;
+        }
+
+        // Check if we need a new path
+        const targetKey = `${Math.floor(tx)},${Math.floor(ty)}`;
+        const needsNewPath =
+            !this.currentPath ||
+            this.lastPathTarget !== targetKey ||
+            this.pathRefreshTimer <= 0;
+
+        if (needsNewPath) {
+            // Request new path from A*
+            const path = game.pathfinder.findPath(this.x, this.y, tx, ty);
+            if (path && path.length > 0) {
+                this.currentPath = path;
+                this.waypointIndex = 0;
+                this.lastPathTarget = targetKey;
+                this.pathRefreshTimer = this.pathRefreshInterval;
+            } else {
+                // No path found - fall back to direct movement
+                this.moveTowards(tx, ty, dt, game);
+                return;
+            }
+        }
+
+        // Decrement path refresh timer
+        this.pathRefreshTimer -= dt;
+
+        // Follow the path
+        if (this.currentPath && this.waypointIndex < this.currentPath.length) {
+            const waypoint = this.currentPath[this.waypointIndex];
+            const distToWaypoint = Utils.dist(this.x, this.y, waypoint.x, waypoint.y);
+
+            // Move to current waypoint
+            if (distToWaypoint > 15) {
+                // Use direct movement to waypoint (no recursive pathfinding)
+                this.moveTowards(waypoint.x, waypoint.y, dt, game);
+            } else {
+                // Reached waypoint, move to next
+                this.waypointIndex++;
+
+                // If we've reached the end of path, go directly to target
+                if (this.waypointIndex >= this.currentPath.length) {
+                    this.moveTowards(tx, ty, dt, game);
+                }
+            }
+        } else {
+            // No path or finished path - direct movement
+            this.moveTowards(tx, ty, dt, game);
+        }
+    }
+
+    /**
+     * Clear current path (call when target changes)
+     */
+    clearPath() {
+        this.currentPath = null;
+        this.waypointIndex = 0;
+        this.lastPathTarget = null;
+    }
+
+    // ============================================
+    // SKILL SYSTEM METHODS
+    // ============================================
+
+    /**
+     * Learn a new skill (called when hero buys skill at Guild)
+     */
+    learnSkill(skillId) {
+        this.learnedSkills[skillId] = true;
+        this.skillCooldowns[skillId] = -999; // Ready immediately
+    }
+
+    /**
+     * Check if hero has learned a specific skill
+     */
+    hasSkill(skillId) {
+        return this.learnedSkills[skillId] === true;
+    }
+
+    /**
+     * Get skill config by ID for this hero's class
+     */
+    getSkillConfig(skillId) {
+        const classSkills = SKILL_CONFIG[this.type];
+        return classSkills ? classSkills[skillId] : null;
+    }
+
+    /**
+     * Check if skill is off cooldown and hero has enough stamina
+     */
+    canUseSkill(skillId, gameTime) {
+        const skill = this.getSkillConfig(skillId);
+        if (!skill) return false;
+        if (!this.hasSkill(skillId)) return false;
+        if (skill.isPassive) return false; // Passives don't "use"
+
+        const lastUsed = this.skillCooldowns[skillId] || -999;
+        const cdRemaining = (lastUsed + skill.cooldown) - gameTime;
+        if (cdRemaining > 0) return false;
+        if (this.stamina < skill.staminaCost) return false;
+
+        return true;
+    }
+
+    /**
+     * Get remaining cooldown for a skill
+     */
+    getSkillCooldown(skillId, gameTime) {
+        const skill = this.getSkillConfig(skillId);
+        if (!skill) return 0;
+        const lastUsed = this.skillCooldowns[skillId] || -999;
+        return Math.max(0, (lastUsed + skill.cooldown) - gameTime);
+    }
+
+    /**
+     * Check if skill trigger conditions are met (AI logic)
+     */
+    checkSkillTrigger(skillId, game) {
+        const skill = this.getSkillConfig(skillId);
+        if (!skill || !skill.trigger) return false;
+
+        const trigger = skill.trigger;
+        const target = this.target;
+
+        if (trigger.type === 'ENEMY_CLOSE') {
+            if (!target || target.remove) return false;
+            const dist = Utils.dist(this.x, this.y, target.x, target.y);
+            if (dist < trigger.minDistance || dist > trigger.maxDistance) return false;
+            if (trigger.hpThreshold && (this.hp / this.maxHp) > trigger.hpThreshold) return false;
+            return true;
+        }
+
+        if (trigger.type === 'ENEMY_LOW_HP') {
+            if (!target || target.remove) return false;
+            const dist = Utils.dist(this.x, this.y, target.x, target.y);
+            if (dist > trigger.maxDistance) return false;
+            if ((target.hp / target.maxHp) > trigger.hpThreshold) return false;
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Main skill AI check - called during combat update
+     */
+    tryUseSkills(game) {
+        if (this.skillLockTimer > 0) return false;
+
+        // Allow skills in FIGHT state, or DECISION state for ranged heroes (proactive evasion)
+        const config = CLASS_CONFIG[this.type];
+        const allowedStates = config?.isRanged
+            ? ['FIGHT', 'DECISION', 'EXPLORE', 'PATROL']
+            : ['FIGHT'];
+        if (!allowedStates.includes(this.state)) return false;
+
+        const classSkills = SKILL_CONFIG[this.type];
+        if (!classSkills) return false;
+
+        // Check each learned skill
+        for (const skillId of Object.keys(this.learnedSkills)) {
+            if (!this.canUseSkill(skillId, game.gameTime)) continue;
+            if (!this.checkSkillTrigger(skillId, game)) continue;
+
+            // Execute the skill!
+            this.executeSkill(skillId, game);
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Execute a skill by ID
+     */
+    executeSkill(skillId, game) {
+        const skill = this.getSkillConfig(skillId);
+        if (!skill) return;
+
+        // Consume stamina and set cooldown
+        this.stamina -= skill.staminaCost;
+        this.skillCooldowns[skillId] = game.gameTime;
+
+        // Visual feedback
+        game.entities.push(new Particle(this.x, this.y - 25, skill.particleText, skill.particleColor));
+
+        // Execute class-specific skill logic
+        if (this.type === 'MERCENARY') {
+            this.executeMercenarySkill(skillId, game);
+        } else if (this.type === 'WAYFARER') {
+            this.executeWayfarerSkill(skillId, game);
+        }
+    }
+
+    /**
+     * Execute Mercenary-specific skills
+     */
+    executeMercenarySkill(skillId, game) {
+        const skill = this.getSkillConfig(skillId);
+        const target = this.target;
+
+        if (skillId === 'SAND_KICK') {
+            if (target && !target.remove) {
+                // Apply stun
+                target.stunTimer = (target.stunTimer || 0) + skill.stunDuration;
+                // Apply accuracy debuff  
+                target.accuracyDebuff = skill.accuracyDebuff;
+                target.accuracyDebuffTimer = skill.debuffDuration;
+                // Bonus damage
+                target.takeDamage(skill.bonusDamage, game, this);
+                // Sand particle effect
+                for (let i = 0; i < 5; i++) {
+                    const ox = (Math.random() - 0.5) * 30;
+                    const oy = (Math.random() - 0.5) * 20;
+                    game.entities.push(new Particle(target.x + ox, target.y + oy, '•', skill.particleColor));
+                }
+            }
+        }
+
+        if (skillId === 'SUCKER_PUNCH') {
+            if (target && !target.remove) {
+                // High damage
+                const damage = this.stats.derived.attackDamage * skill.damageMultiplier;
+                target.takeDamage(damage, game, this);
+                // Knockback
+                const dx = target.x - this.x;
+                const dy = target.y - this.y;
+                const dist = Math.hypot(dx, dy) || 1;
+                target.x += (dx / dist) * skill.knockbackDistance;
+                target.y += (dy / dist) * skill.knockbackDistance;
+            }
+        }
+    }
+
+    /**
+     * Execute Wayfarer-specific skills (Nav-Grid aware!)
+     */
+    executeWayfarerSkill(skillId, game) {
+        const skill = this.getSkillConfig(skillId);
+        const target = this.target;
+
+        if (skillId === 'TUMBLE' || skillId === 'CALTROPS') {
+            // Calculate dash direction (away from enemy)
+            let dashX = this.x;
+            let dashY = this.y;
+
+            if (target && !target.remove) {
+                const dx = this.x - target.x;
+                const dy = this.y - target.y;
+                const dist = Math.hypot(dx, dy) || 1;
+                const dirX = dx / dist;
+                const dirY = dy / dist;
+
+                // Try direct backward dash first
+                let tryX = this.x + dirX * skill.dashDistance;
+                let tryY = this.y + dirY * skill.dashDistance;
+
+                // Use NavGrid to find safe landing spot
+                if (game.navGrid && skill.trigger.useNavGrid) {
+                    const safeSpot = this.findSafeDashSpot(tryX, tryY, dirX, dirY, skill.dashDistance, game);
+                    if (safeSpot) {
+                        dashX = safeSpot.x;
+                        dashY = safeSpot.y;
+                    } else {
+                        // No safe spot found - use direct dash anyway (fallback)
+                        dashX = tryX;
+                        dashY = tryY;
+                    }
+                } else {
+                    // No NavGrid - use direct dash
+                    dashX = tryX;
+                    dashY = tryY;
+                }
+
+                // Clamp to world bounds
+                dashX = Math.max(30, Math.min(game.canvas.width - 30, dashX));
+                dashY = Math.max(30, Math.min(game.canvas.height - 30, dashY));
+            }
+
+            // Execute dash (instant teleport for now)
+            this.x = dashX;
+            this.y = dashY;
+            this.vel.x = 0;
+            this.vel.y = 0;
+
+            // Fire instant shot (Tumble)
+            if (skill.instantShot && target && !target.remove) {
+                const damage = this.stats.derived.attackDamage * skill.shotDamageMultiplier;
+                game.entities.push(new Projectile(
+                    this.x, this.y,
+                    target.x, target.y,
+                    damage, this, target,
+                    skill.particleColor
+                ));
+            }
+
+            // Leave caltrops (Caltrops skill)
+            if (skillId === 'CALTROPS') {
+                // Apply slow to enemies near original position
+                const oldX = this.x - (dashX - this.x); // Approximate old pos
+                const oldY = this.y - (dashY - this.y);
+                for (const ent of game.entities) {
+                    if (ent.constructor.name === 'Monster') {
+                        const d = Utils.dist(oldX, oldY, ent.x, ent.y);
+                        if (d < skill.slowRadius) {
+                            ent.slowEffect = skill.slowEffect;
+                            ent.slowTimer = skill.slowDuration;
+                        }
+                    }
+                }
+            }
+
+            // Lock movement briefly
+            this.skillLockTimer = 0.3;
+        }
+
+        if (skillId === 'KILL_SHOT') {
+            if (target && !target.remove) {
+                const damage = this.stats.derived.attackDamage * skill.damageMultiplier;
+                game.entities.push(new Projectile(
+                    this.x, this.y,
+                    target.x, target.y,
+                    damage, this, target,
+                    skill.particleColor
+                ));
+            }
+        }
+    }
+
+    /**
+     * Find a safe spot to dash to using NavGrid
+     */
+    findSafeDashSpot(targetX, targetY, dirX, dirY, maxDist, game) {
+        if (!game.navGrid) return { x: targetX, y: targetY };
+
+        // Check if target is walkable
+        if (game.navGrid.isWalkable(targetX, targetY)) {
+            return { x: targetX, y: targetY };
+        }
+
+        // Try shorter distances
+        for (let dist = maxDist - 20; dist >= 30; dist -= 20) {
+            const tryX = this.x + dirX * dist;
+            const tryY = this.y + dirY * dist;
+            if (game.navGrid.isWalkable(tryX, tryY)) {
+                return { x: tryX, y: tryY };
+            }
+        }
+
+        // Try perpendicular directions (left/right)
+        const perpX = -dirY;
+        const perpY = dirX;
+        for (const side of [1, -1]) {
+            const tryX = this.x + (dirX * 40) + (perpX * side * 50);
+            const tryY = this.y + (dirY * 40) + (perpY * side * 50);
+            if (game.navGrid.isWalkable(tryX, tryY)) {
+                return { x: tryX, y: tryY };
+            }
+        }
+
+        // Fallback: stay in place
+        return null;
+    }
 }
+

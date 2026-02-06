@@ -5,6 +5,13 @@ export const ITEM_CONFIG = {
         cost: 30,        // Gold cost at market
         healAmount: 50,  // HP restored
         description: "Restores 50 HP when consumed"
+    },
+    STAMINA_POTION: {
+        name: "Stamina Potion",
+        type: "CONSUMABLE",
+        cost: 25,        // Slightly cheaper than HP potion
+        staminaAmount: 60, // Stamina restored
+        description: "Restores 60 Stamina when consumed"
     }
 };
 

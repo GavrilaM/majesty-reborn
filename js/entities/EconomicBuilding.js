@@ -45,6 +45,10 @@ export class EconomicBuilding {
             // If fully built, 0 HP means destroyed; otherwise it's just unconstructed
             if (this.constructed) {
                 this.remove = true;
+                // Unmark building footprint from navigation grid
+                if (game.navGrid) {
+                    game.navGrid.unmarkBlocked(this.x, this.y, this.width, this.height);
+                }
                 this.visitors.forEach(hero => {
                     hero.visible = true;
                     hero.state = 'DECISION';
@@ -324,7 +328,12 @@ export class EconomicBuilding {
         return bestUpgrade;
     }
 
-    takeDamage(amount, game, source = null) { if (source && source.remove) return; this.hp -= amount; }
+    takeDamage(amount, game, source = null) {
+        if (source && source.remove) return;
+        this.hp -= amount;
+        // Track last damage time for patrol threat detection
+        this.lastDamageTime = game?.gameTime || 0;
+    }
 
     draw(ctx) {
         ctx.save();
